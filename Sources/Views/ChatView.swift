@@ -6,12 +6,32 @@ import SwiftUI
 struct ChatPanel: View {
     @Environment(UsageStore.self) private var store
     let session: SessionStat
+    /// Height of the message list (smaller in a floating window).
+    var listHeight: CGFloat = 340
     @State private var center = SendCenter.shared
     @State private var items: [ChatItem] = []
     @State private var dictation = Dictation()
     @State private var pickerOpen = false
+    /// Recipient of the next message: nil = this session, else any other session (open or closed).
+    @State private var recipient: String?
+    @State private var sentTo: String?
 
     private var live: LiveSession? { store.live[session.info.id] }
+
+    private var recipientName: String? {
+        guard let id = recipient, id != session.info.id else { return nil }
+        return store.live[id]?.name ?? store.snapshot.sessions.first { $0.info.id == id }?.name
+    }
+
+    /// Recent sessions that are not running (last 7 days), most recent first.
+    private var closedSessions: [SessionStat] {
+        let since = Date().timeIntervalSince1970 - 7 * 86400
+        let hidden = SessionFiles.hidden
+        return Array(store.snapshot.sessions
+            .filter { $0.info.id != session.info.id && store.live[$0.info.id] == nil && $0.info.last > since && !hidden.contains($0.info.id) }
+            .sorted { $0.info.last > $1.info.last }
+            .prefix(12))
+    }
 
     var body: some View {
         let others = store.live.values.filter {
@@ -27,13 +47,8 @@ struct ChatPanel: View {
         Block(title: "Messages entre agents", note: items.isEmpty ? nil : "\(items.count) message\(items.count > 1 ? "s" : "")") {
             Text("Ce que cette session a échangé avec les autres sessions Claude Code et avec My Claude Code. Ni son terminal, ni les prompts tapés dedans : ils sont dans le miroir ci-dessus.")
                 .font(Theme.sans(11)).foregroundStyle(Theme.inkFaint).fixedSize(horizontal: false, vertical: true)
-            RecipientPicker(selfName: live?.name ?? session.name, others: others,
-                            recipientID: Binding(get: { nil }, set: { id in
-                                // Choosing another session opens its own conversation.
-                                if let id, let target = store.snapshot.sessions.first(where: { $0.info.id == id }) {
-                                    NotificationCenter.default.post(name: .openSession, object: target.index)
-                                }
-                            }),
+            RecipientPicker(selfName: live?.name ?? session.name, others: others, closed: closedSessions,
+                            recipientID: $recipient,
                             open: $pickerOpen)
 
             ScrollViewReader { proxy in
@@ -54,7 +69,7 @@ struct ChatPanel: View {
                     }
                     .padding(.vertical, 4)
                 }
-                .frame(height: 340)
+                .frame(height: listHeight)
                 .scrollIndicators(.never)
                 .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
                 .onChange(of: items.count) { _, _ in withAnimation(.snappy) { proxy.scrollTo("bottom", anchor: .bottom) } }
@@ -73,7 +88,7 @@ struct ChatPanel: View {
                         .background(Circle().fill((dictation.isRecording ? Color.red : Theme.clay).opacity(0.13)))
                 }
                 .buttonStyle(.plain)
-                TextField("", text: text, prompt: Text(dictation.isRecording ? "Je vous écoute…" : "Écrire à l'agent…")
+                TextField("", text: text, prompt: Text(dictation.isRecording ? "Je vous écoute…" : recipientName.map { "Écrire à \($0)…" } ?? "Écrire à l'agent…")
                             .foregroundStyle(Theme.inkFaint), axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(Theme.sans(13.5)).foregroundStyle(Theme.ink)
@@ -92,6 +107,7 @@ struct ChatPanel: View {
                 .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if let error = dictation.error { Text(error).font(Theme.sans(11.5)).foregroundStyle(.orange) }
+            if let sentTo { Text("Message envoyé à \(sentTo) : sa réponse arrive dans ses Messages entre agents.").font(Theme.sans(11)).foregroundStyle(Theme.sage) }
         }
         .onChange(of: dictation.transcript) { _, t in if dictation.isRecording { center.drafts[session.info.id] = t } }
         .task(id: session.info.id) {
@@ -112,11 +128,20 @@ struct ChatPanel: View {
         return live?.phase == 0 || Date().timeIntervalSince(last.date) < 20
     }
 
+    /// To this session, or to the session chosen in "À" (open: relayed; closed: relaunched in the background).
     private func send(_ prompt: String) {
         dictation.stop()
         let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !p.isEmpty else { return }
-        center.send(p, from: session, to: live)
+        if let id = recipient, id != session.info.id, let target = store.snapshot.sessions.first(where: { $0.info.id == id }) {
+            let targetLive = store.live[id]
+            center.send(p, from: target, to: targetLive)
+            center.drafts[session.info.id] = nil
+            sentTo = targetLive?.name ?? target.name
+        } else {
+            center.send(p, from: session, to: live)
+            sentTo = nil
+        }
     }
 }
 

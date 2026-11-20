@@ -28,7 +28,18 @@ struct TermRowsView: View {
     private func styled(_ line: String) -> some View {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         let font = Term.mono(11)
-        if trimmed.hasPrefix("❯") || trimmed.hasPrefix("> ") {
+        if trimmed.range(of: #"^❯\s*\d+\."#, options: .regularExpression) != nil {
+            // Selected option of a choice menu.
+            Text(String(trimmed.drop(while: { $0 == "❯" || $0 == " " })))
+                .font(Term.mono(11, .semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.clay.opacity(0.85)))
+        } else if trimmed.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil, line.hasPrefix(" ") {
+            // Other options of a choice menu.
+            Text(trimmed).font(font).foregroundStyle(Term.text.opacity(0.75))
+                .padding(.horizontal, 8).padding(.vertical, 3)
+        } else if trimmed.hasPrefix("❯") || trimmed.hasPrefix("> ") {
             // The prompt: what was typed, on a soft band.
             (Text("❯ ").foregroundStyle(Term.green).fontWeight(.bold)
              + Text(String(trimmed.drop(while: { $0 == "❯" || $0 == ">" || $0 == " " }))).foregroundStyle(Term.text).fontWeight(.medium))

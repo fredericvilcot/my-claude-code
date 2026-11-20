@@ -38,12 +38,23 @@ struct QuickView: View {
         return out
     }
 
-    private enum Dest { case ephemeral, all, session(LiveSession), project(String) }
+    private enum Dest { case ephemeral, all, session(LiveSession), closed(SessionStat), project(String) }
+
+    /// Recent sessions that are not running: writing to one relaunches it in the background with its history.
+    private var closedSessions: [SessionStat] {
+        let since = Date().timeIntervalSince1970 - 7 * 86400
+        let hidden = SessionFiles.hidden
+        return Array(store.snapshot.sessions
+            .filter { store.live[$0.info.id] == nil && $0.info.last > since && !hidden.contains($0.info.id) }
+            .sorted { $0.info.last > $1.info.last }
+            .prefix(8))
+    }
 
     private var dest: Dest {
         if target == "all", sessions.count > 1 { return .all }
         if target.hasPrefix("sess:"), let s = sessions.first(where: { $0.sessionId == String(target.dropFirst(5)) }) { return .session(s) }
         if target.hasPrefix("proj:") { return .project(String(target.dropFirst(5))) }
+        if target.hasPrefix("closed:"), let s = store.snapshot.sessions.first(where: { $0.info.id == String(target.dropFirst(7)) }) { return .closed(s) }
         return .ephemeral
     }
 
@@ -55,6 +66,8 @@ struct QuickView: View {
             ("person.3.fill", "Toutes les sessions", "Le message est transmis à chaque session ouverte par la messagerie entre sessions.", "Envoyer", "arrow.up")
         case .session(let s):
             ("at", s.name, "Le message est transmis à cette session ; sa réponse arrive dans son chat.", "Envoyer", "arrow.up")
+        case .closed(let s):
+            ("arrow.clockwise", s.name, "Session fermée : elle est relancée en arrière-plan avec son historique et reçoit votre message.", "Envoyer", "arrow.up")
         case .project(let p):
             ("folder.fill", (p as NSString).lastPathComponent,
              "Nouvelle session Claude Code dans un onglet de votre fenêtre iTerm, avec cette consigne comme premier message.",
@@ -127,7 +140,7 @@ struct QuickView: View {
                     Spacer(minLength: 0)
                 }
                 if pickerOpen {
-                    DestinationPicker(target: $target, projects: projects, sessions: sessions,
+                    DestinationPicker(target: $target, projects: projects, sessions: sessions, closed: closedSessions,
                                       pickFolder: pickFolder, close: { withAnimation(.snappy(duration: 0.22)) { pickerOpen = false } })
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
@@ -219,6 +232,7 @@ struct QuickView: View {
                 if let error { launchError = error } else { text = ""; close() }
             }
         case .session(let s): center.quick(p, to: [s]); text = ""
+        case .closed(let s): center.send(p, from: s, to: nil); text = ""
         case .all: center.quick(p, to: sessions); text = ""
         case .ephemeral: center.quick(p, to: []); text = ""
         }
@@ -293,6 +307,7 @@ struct DestinationPicker: View {
     @Binding var target: String
     let projects: [(path: String, last: Double)]
     let sessions: [LiveSession]
+    var closed: [SessionStat] = []
     let pickFolder: () -> Void
     let close: () -> Void
 
@@ -313,6 +328,13 @@ struct DestinationPicker: View {
                 if sessions.count > 1 {
                     row(key: "all", symbol: "person.3.fill", tint: Theme.inkSoft, title: "Toutes les sessions",
                         subtitle: nil, trailing: "\(sessions.count)")
+                }
+                if !closed.isEmpty {
+                    section("Session fermée", note: "relancée en arrière-plan").padding(.top, 8)
+                    ForEach(closed) { s in
+                        row(key: "closed:" + s.info.id, symbol: "arrow.clockwise", tint: Color.gray, title: s.name,
+                            subtitle: s.info.branch, trailing: OverviewView.ago(Date(timeIntervalSince1970: s.info.last)))
+                    }
                 }
 
                 section("Nouveau chantier", note: "onglet iTerm").padding(.top, 8)

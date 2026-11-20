@@ -9,7 +9,7 @@ terminal, an in-app notification center and a voice-ready quick command — one 
 ![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)
 ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-lightgrey)
 ![Swift](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-orange)
-![License](https://img.shields.io/badge/license-MIT-blue)
+![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)
 
 </div>
 
@@ -37,8 +37,9 @@ terminal, an in-app notification center and a voice-ready quick command — one 
 | **Plan quotas** | 5-hour session, weekly and per-model limits, read from `/usage` every minute and from Claude Code's status line on every reply. |
 | **Forecasts** | Hour-by-hour projection of when each quota runs out, based on your usual working hours over the last four weeks and this week's intensity. |
 | **Live sessions** | Open sessions sorted by state (working, waiting for you, idle), what the agent is doing right now, context usage and one-click compaction. |
-| **Terminal mirror** | The exact screen of a session's iTerm tab, refreshed every second, with a prompt line to type to the agent as if you were in the terminal. |
+| **Terminal mirror** | The exact screen of a session's iTerm tab, live. Click it to take the keyboard: arrows, Return, Esc, Tab and text go straight to the session, choice menus included. |
 | **Notification center** | Session finished, waiting for your answer, context nearly full, quota at risk, evening summary — inside the app only. |
+| **Agent messaging** | Message any session — open, or closed and relaunched in the background with its history — from another session or from the quick command. |
 | **Quick command** | Start a new project in an iTerm tab, message a session, or hand a task to an ephemeral agent — typed or dictated. |
 | **Floating windows** | Quotas, notifications, sessions and the quick command detach into small always-on-top windows, even over full-screen apps. |
 | **Statistics** | API-equivalent costs, tokens, models, projects and an activity calendar. |
@@ -115,11 +116,15 @@ A fixed header keeps the session's name, folder, state, branch and messaging nam
 Below it:
 
 - **Terminal** — the live screen of the session's iTerm tab (*direct*), coloured like a real terminal.
-  **Type after `❯`** at the bottom: it is exactly like typing in that terminal — your message appears, then
-  the agent's answer. Sessions without an iTerm tab (closed, or running in the background) are rebuilt from
-  their transcript (*journal*).
-- **Messages entre agents** *(folded)* — what the session exchanged with your other Claude Code sessions
-  and with the app. Not its terminal, not your prompts.
+  **Click it to take the keyboard** (clay border, *clavier* in its bar): every key goes to the session as if
+  you typed in iTerm — text, Return, Esc, Tab, ⌃C, and the arrow keys to move through Claude Code's choice
+  menus. Sessions without an iTerm tab (closed, or running in the background) are rebuilt from their
+  transcript (*journal*).
+- **Messages entre agents** — what the session exchanged with your other Claude Code sessions and with the
+  app (not its terminal, not your prompts). Pick any session in **À** — open, or closed in the last seven
+  days — to write to it: a closed session is relaunched in the background with its history.
+- *Terminal* and *Messages entre agents* are foldable cards that work as an accordion: opening one folds
+  the other.
 - **Contexte** — context size and **Compacter**: the session writes a synthesis note (goal, progress,
   decisions, key files, next steps) to `~/.claude/session-notes/`, then `/compact` runs and keeps it.
   Requires iTerm.
@@ -149,7 +154,7 @@ Type or **dictate** (microphone button) an instruction, pick a destination in **
 | Destination | What happens |
 |---|---|
 | **Agent éphémère** | An ephemeral Claude Code agent runs the task in the background with your settings, reports back in the history, then exits. |
-| **Message to a session** (or all) | The message is delivered through Claude Code's inter-session messaging; the reply shows in the session's *Messages entre agents*. |
+| **Message to a session** (or all) | The message is delivered through Claude Code's inter-session messaging; the reply shows in the session's *Messages entre agents*. Closed sessions are listed too: they are relaunched in the background with their history. |
 | **Nouveau chantier** | A new tab opens in your iTerm hotkey window and Claude Code starts in the chosen folder with your instruction as its first message. |
 
 The destination always resets to the ephemeral agent, so a new project never starts by accident. The
@@ -166,7 +171,7 @@ that stay visible on every Space, including over full-screen apps — handy duri
 - Open windows are restored, in place, the next time the app starts.
 
 A detached session shows its summary (model, replies, cost, duration), context with *Compacter*, its live
-terminal where you can type, and its agent-to-agent messages.
+terminal (click to type) and its agent-to-agent messages, as an accordion.
 
 ### Stats and Statut tabs
 
@@ -231,4 +236,8 @@ build.sh         build, sign, install
 
 ## License
 
-[MIT](LICENSE) © 2026 Frédéric Vilcot
+[PolyForm Noncommercial 1.0.0](LICENSE.md) © 2026 Frédéric Vilcot.
+
+You may use, study, modify and share this software for any **noncommercial** purpose (personal use,
+research, education, hobby projects, charitable and public organizations). Any commercial use requires a
+separate license from the author.

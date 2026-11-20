@@ -70,7 +70,7 @@ final class MiniWindows {
         panel.isOpaque = false
         panel.hasShadow = true
         // The quotas card needs its full width (ring + weekly rows); the others can shrink a little.
-        panel.minSize = NSSize(width: kind == .quotas ? kind.size.width : 300, height: 200)
+        panel.minSize = NSSize(width: kind == .quotas ? kind.size.width : 320, height: { if case .session = kind { return 480 } else { return 200 } }())
         let effect = PanelBackground(frame: NSRect(origin: .zero, size: kind.size))
         effect.material = .popover
         effect.blendingMode = .behindWindow
@@ -182,6 +182,7 @@ struct MiniWindowView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .clipped()
         }
         .background(Theme.paper.opacity(0.92))
     }
@@ -260,12 +261,16 @@ struct SessionFollowView: View {
                         .fixedSize()
                     if let live { CompactButton(session: session, live: live, compact: true).fixedSize() }
                 }
-                TerminalMirrorView(session: session, live: live, fill: true)
-                    .frame(maxHeight: .infinity)
-                // Agent-to-agent messages, folded by default under the live terminal.
-                ChatPanel(session: session)
-                    .environment(\.blockFold, "mini")
-                    .padding(.horizontal, -12)
+                // Terminal and agent-to-agent messages: two foldable cards, opening one folds the other.
+                VStack(spacing: 0) {
+                    Block(title: "Terminal", note: live?.pid != nil ? "clic pour taper" : "journal") {
+                        TerminalMirrorView(session: session, live: live, fill: true)
+                            .frame(minHeight: 110, maxHeight: .infinity)
+                    }
+                    ChatPanel(session: session, listHeight: 260)
+                }
+                .environment(\.blockFold, "mini")
+                .frame(maxHeight: .infinity, alignment: .top)
             } else {
                 Text("Session introuvable.").font(Theme.sans(12)).foregroundStyle(Theme.inkSoft)
             }

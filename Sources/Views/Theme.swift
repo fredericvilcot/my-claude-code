@@ -83,13 +83,27 @@ struct Block<Content: View>: View {
         if Self.defaultFolded.contains(title) { return !openedRaw.split(separator: " ").contains(Substring(key)) }
         return foldedRaw.split(separator: " ").contains(Substring(key))
     }
+    /// Cards that behave as an accordion within a scope: opening one folds the others.
+    static var accordion: Set<String> { ["Terminal", "Messages entre agents"] }
+
     private func toggleFold() {
-        guard let key = foldKey else { return }
+        guard let key = foldKey, let scope = foldScope else { return }
+        let opening = folded
         let isDefault = Self.defaultFolded.contains(title)
         var set = Set((isDefault ? openedRaw : foldedRaw).split(separator: " ").map(String.init))
         if set.contains(key) { set.remove(key) } else { set.insert(key) }
+        var opened = Set(openedRaw.split(separator: " ").map(String.init))
+        var foldedSet = Set(foldedRaw.split(separator: " ").map(String.init))
+        if isDefault { opened = set } else { foldedSet = set }
+        if opening, Self.accordion.contains(title) {
+            for other in Self.accordion where other != title {
+                let otherKey = "\(scope).\(other)".replacingOccurrences(of: " ", with: "_")
+                if Self.defaultFolded.contains(other) { opened.remove(otherKey) } else { foldedSet.insert(otherKey) }
+            }
+        }
         withAnimation(.snappy(duration: 0.22)) {
-            if isDefault { openedRaw = set.sorted().joined(separator: " ") } else { foldedRaw = set.sorted().joined(separator: " ") }
+            openedRaw = opened.sorted().joined(separator: " ")
+            foldedRaw = foldedSet.sorted().joined(separator: " ")
         }
     }
 

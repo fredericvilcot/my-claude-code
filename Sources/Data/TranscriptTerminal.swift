@@ -6,14 +6,14 @@ enum TranscriptTerminal {
     private static var cache: [String: (size: UInt64, rows: [TerminalMirror.Row])] = [:]
     private static let lock = NSLock()
 
-    static func rows(for sessionID: String, limit: Int = 140) -> [TerminalMirror.Row] {
+    static func rows(for sessionID: String, limit: Int = 600) -> [TerminalMirror.Row] {
         guard let path = ChatLog.transcript(for: sessionID), let handle = FileHandle(forReadingAtPath: path) else { return [] }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
         lock.lock()
         if let hit = cache[path], hit.size == size { lock.unlock(); return hit.rows }
         lock.unlock()
-        let window: UInt64 = 1536 * 1024
+        let window: UInt64 = 6 * 1024 * 1024   // long sessions: enough of the transcript for a real scrollback
         try? handle.seek(toOffset: size > window ? size - window : 0)
         var rows = build(handle.readDataToEndOfFile())
         if rows.count > limit { rows = Array(rows.suffix(limit)) }

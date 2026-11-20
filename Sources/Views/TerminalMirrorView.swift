@@ -10,6 +10,8 @@ struct TerminalMirrorView: View {
     @State private var mirror: TerminalMirror?
     @State private var transcript: [TerminalMirror.Row] = []
     @State private var input = ""
+    /// The terminal has the keyboard: every key goes to the session's iTerm tab.
+    @State private var keyboard = false
     @State private var inputError: String?
 
     var body: some View {
@@ -19,7 +21,8 @@ struct TerminalMirrorView: View {
         }
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Term.background))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(keyboard ? Theme.clay.opacity(0.8) : Color.white.opacity(0.07), lineWidth: keyboard ? 1.5 : 1))
         .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
         .task(id: live?.pid) { await poll() }
     }
@@ -34,6 +37,9 @@ struct TerminalMirrorView: View {
             if mirror == nil || mirror?.failure != nil {
                 Text("journal").font(Term.mono(9.5, .semibold)).foregroundStyle(Term.dim)
             } else {
+                if keyboard {
+                    Label("clavier", systemImage: "keyboard").font(Term.mono(9.5, .semibold)).foregroundStyle(Theme.clay)
+                }
                 TimelineView(.periodic(from: .now, by: 1)) { ctx in
                     HStack(spacing: 4) {
                         Circle().fill(Term.green).frame(width: 6, height: 6)
@@ -57,12 +63,28 @@ struct TerminalMirrorView: View {
     private var content: some View {
         if let mirror, mirror.failure == nil {
             ScrollView {
-                TermRowsView(rows: mirror.rows).padding(.horizontal, 14).padding(.vertical, 12)
+                VStack(alignment: .leading, spacing: 10) {
+                    // iTerm only exposes the visible screen: the session's history above it comes from its transcript.
+                    if !transcript.isEmpty {
+                        TermRowsView(rows: transcript).opacity(0.78)
+                        HStack(spacing: 8) {
+                            Rectangle().fill(Term.green.opacity(0.35)).frame(height: 1)
+                            Text("en direct").font(Term.mono(9.5, .semibold)).foregroundStyle(Term.green).fixedSize()
+                            Rectangle().fill(Term.green.opacity(0.35)).frame(height: 1)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    TermRowsView(rows: mirror.rows)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+            }
+            // Click the screen to give it the keyboard: arrows, Return, Esc, Tab, ⌫, ⌃C and text go to iTerm.
+            .overlay {
+                KeyCapture(active: $keyboard) { mirror.send($0) }
             }
             .defaultScrollAnchor(.bottom)
             .scrollIndicators(.never)
             .frame(minHeight: fill ? 120 : 340, maxHeight: fill ? .infinity : 340)
-            promptLine(mirror)
         } else {
             // No iTerm tab (closed session, background agent, iTerm unreachable): rebuilt from the transcript.
             ScrollView {
@@ -125,8 +147,20 @@ struct TerminalMirrorView: View {
         }
         let m = mirror?.tty == tty ? mirror! : TerminalMirror(tty: tty)
         mirror = m
+        var lastHistory = Date.distantPast
         while !Task.isCancelled {
             await m.refresh()
+            // History (transcript) under the live screen: refreshed every few seconds, cached by file size.
+            if Date().timeIntervalSince(lastHistory) > 3 {
+                lastHistory = Date()
+                let id = session.info.id
+                let history = await Task.detached { TranscriptTerminal.rows(for: id) }.value
+                if history != transcript { transcript = history }
+            }
+            if keyboard {   // typing: refresh every 150 ms (each send also refreshes at once)
+                try? await Task.sleep(for: .milliseconds(150))
+                continue
+            }
             if m.failure != nil, transcript.isEmpty {
                 let id = session.info.id
                 transcript = await Task.detached { TranscriptTerminal.rows(for: id) }.value
@@ -134,4 +168,59 @@ struct TerminalMirrorView: View {
             try? await Task.sleep(for: .seconds(1))
         }
     }
+}
+
+/// Transparent layer over the mirrored screen: a click gives it the keyboard; keys are translated to terminal
+/// input (escape sequences for arrows…) and sent to the session. Scrolling and clicks still reach the view below
+/// through the wheel; text selection is off while the keyboard is captured.
+struct KeyCapture: NSViewRepresentable {
+    @Binding var active: Bool
+    let send: (String) -> Void
+
+    final class KeyView: NSView {
+        var send: (String) -> Void = { _ in }
+        var onFocus: (Bool) -> Void = { _ in }
+        override var acceptsFirstResponder: Bool { true }
+        override var needsPanelToBecomeKey: Bool { true }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) { window?.makeKey(); window?.makeFirstResponder(self) }
+        override func becomeFirstResponder() -> Bool { onFocus(true); return true }
+        override func resignFirstResponder() -> Bool { onFocus(false); return true }
+        // Let trackpad/wheel scrolling through to the scroll view underneath: this layer only takes clicks and keys.
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            if let type = NSApp.currentEvent?.type, type == .scrollWheel || type == .magnify || type == .swipe { return nil }
+            return super.hitTest(point)
+        }
+
+        override func keyDown(with event: NSEvent) {
+            let esc = "\u{1B}"
+            switch event.keyCode {
+            case 126: send(esc + "[A"); return          // ↑
+            case 125: send(esc + "[B"); return          // ↓
+            case 124: send(esc + "[C"); return          // →
+            case 123: send(esc + "[D"); return          // ←
+            case 36, 76: send("\r"); return             // Return / Enter
+            case 53: send(esc); return                   // Esc
+            case 48: send(event.modifierFlags.contains(.shift) ? esc + "[Z" : "\t"); return   // Tab / ⇧Tab
+            case 51: send("\u{7F}"); return             // ⌫
+            case 117: send(esc + "[3~"); return         // ⌦
+            default: break
+            }
+            if event.modifierFlags.contains(.control), let c = event.charactersIgnoringModifiers?.lowercased().unicodeScalars.first,
+               c.value >= 97, c.value <= 122 {
+                send(String(UnicodeScalar(c.value - 96)!))   // ⌃A…⌃Z
+                return
+            }
+            if event.modifierFlags.contains(.command) { super.keyDown(with: event); return }
+            if let chars = event.characters, !chars.isEmpty { send(chars) }
+        }
+    }
+
+    func makeNSView(context: Context) -> KeyView {
+        let v = KeyView()
+        v.send = send
+        v.onFocus = { focused in DispatchQueue.main.async { active = focused } }
+        return v
+    }
+    func updateNSView(_ v: KeyView, context: Context) { v.send = send }
 }

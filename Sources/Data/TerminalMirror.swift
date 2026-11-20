@@ -18,44 +18,149 @@ final class TerminalMirror {
 
     init(tty: String) { self.tty = tty }
 
-    func refresh() async {
-        let tty = self.tty
-        let result: (String?, String?, String?) = await withCheckedContinuation { cont in
-            Self.queue.async {
-                let source = """
-                tell application "iTerm"
-                    try
-                        repeat with t in tabs of current window
-                            repeat with s in sessions of t
-                                if tty of s is "\(tty)" then return (name of s) & (ASCII character 30) & (contents of s)
-                            end repeat
-                        end repeat
-                    end try
-                    repeat with w in windows
-                        repeat with t in tabs of w
-                            repeat with s in sessions of t
-                                if tty of s is "\(tty)" then return (name of s) & (ASCII character 30) & (contents of s)
-                            end repeat
-                        end repeat
+    // MARK: iTerm access (low latency)
+    //
+    // Finding a session by looping over tabs costs ~120 ms per call (one Apple event per property); addressing
+    // "session j of tab i" directly costs ~18 ms. The tab is located once, then addressed directly; a miss
+    // (tab moved or closed) triggers a new lookup. All calls run on one serial queue, with compiled scripts.
+
+    /// Where the session lives: in the current (hotkey) window, or in a regular window by id.
+    private struct Location { var inCurrent: Bool; var window: Int; var tab: Int; var session: Int }
+    nonisolated(unsafe) private var location: Location?
+    nonisolated(unsafe) private static var scripts: [String: NSAppleScript] = [:]
+
+    nonisolated private static func run(_ name: String, _ source: String, _ args: [String]) -> String? {
+        var error: NSDictionary?
+        let script: NSAppleScript
+        if let cached = scripts[name] { script = cached } else {
+            guard let s = NSAppleScript(source: source) else { return nil }
+            s.compileAndReturnError(&error)
+            scripts[name] = s
+            script = s
+        }
+        let list = NSAppleEventDescriptor.list()
+        for (i, a) in args.enumerated() { list.insert(NSAppleEventDescriptor(string: a), at: i + 1) }
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kCoreEventClass), eventID: AEEventID(kAEOpenApplication),
+                                           targetDescriptor: nil, returnID: AEReturnID(kAutoGenerateReturnID),
+                                           transactionID: AETransactionID(kAnyTransactionID))
+        event.setParam(list, forKeyword: AEKeyword(keyDirectObject))
+        let result = script.executeAppleEvent(event, error: &error)
+        return error == nil ? (result.stringValue ?? "") : nil
+    }
+
+    nonisolated private static let locateSource = """
+    on run argv
+        set ttyName to item 1 of argv
+        tell application "iTerm"
+            try
+                set tc to count of tabs of current window
+                repeat with i from 1 to tc
+                    set sc to count of sessions of tab i of current window
+                    repeat with j from 1 to sc
+                        if tty of session j of tab i of current window is ttyName then return "c,0," & i & "," & j
                     end repeat
-                    return ""
-                end tell
-                """
-                var error: NSDictionary?
-                let out = NSAppleScript(source: source)?.executeAndReturnError(&error).stringValue
-                if let error {
-                    cont.resume(returning: (nil, nil, error[NSAppleScript.errorMessage] as? String ?? "iTerm indisponible"))
-                } else if let out, let sep = out.firstIndex(of: "\u{1E}") {
-                    cont.resume(returning: (String(out[..<sep]), String(out[out.index(after: sep)...]), nil))
-                } else {
-                    cont.resume(returning: (nil, nil, "Onglet iTerm introuvable."))
-                }
+                end repeat
+            end try
+            repeat with w in windows
+                set wid to id of w
+                set tc to count of tabs of w
+                repeat with i from 1 to tc
+                    set sc to count of sessions of tab i of w
+                    repeat with j from 1 to sc
+                        if tty of session j of tab i of w is ttyName then return "w," & wid & "," & i & "," & j
+                    end repeat
+                end repeat
+            end repeat
+        end tell
+        return ""
+    end run
+    """
+
+    /// item 1 tty, 2 "c"/"w", 3 window id, 4 tab, 5 session, 6 mode ("read" or "send"), 7 text to send.
+    nonisolated private static let actSource = """
+    on run argv
+        set ttyName to item 1 of argv
+        set i to (item 4 of argv) as integer
+        set j to (item 5 of argv) as integer
+        tell application "iTerm"
+            if item 2 of argv is "c" then
+                -- Never store the hotkey window in a variable: it resolves to "window id N", which iTerm can't reach.
+                if tty of session j of tab i of current window is not ttyName then return "MISS"
+                if item 6 of argv is "send" then
+                    tell session j of tab i of current window to write text (item 7 of argv) newline NO
+                    return "OK"
+                end if
+                return (name of session j of tab i of current window) & (ASCII character 30) & (contents of session j of tab i of current window)
+            else
+                set w to window id ((item 3 of argv) as integer)
+                if tty of session j of tab i of w is not ttyName then return "MISS"
+                if item 6 of argv is "send" then
+                    tell session j of tab i of w to write text (item 7 of argv) newline NO
+                    return "OK"
+                end if
+                return (name of session j of tab i of w) & (ASCII character 30) & (contents of session j of tab i of w)
+            end if
+        end tell
+    end run
+    """
+
+    /// Runs `mode` on the session, locating it first if needed and once more after a miss.
+    nonisolated private func act(_ mode: String, _ text: String = "") -> String? {
+        for attempt in 0..<2 {
+            if location == nil || attempt == 1 {
+                guard let found = Self.run("locate", Self.locateSource, [tty]), !found.isEmpty else { location = nil; return nil }
+                let f = found.split(separator: ",").map(String.init)
+                guard f.count == 4, let w = Int(f[1]), let t = Int(f[2]), let s = Int(f[3]) else { return nil }
+                location = Location(inCurrent: f[0] == "c", window: w, tab: t, session: s)
+            }
+            guard let l = location else { return nil }
+            let out = Self.run("act", Self.actSource, [tty, l.inCurrent ? "c" : "w", String(l.window), String(l.tab), String(l.session), mode, text])
+            if let out, out != "MISS" { return out }
+        }
+        return nil
+    }
+
+    // MARK: Keyboard
+
+    @ObservationIgnored private var pending = ""
+    @ObservationIgnored private var sending = false
+
+    /// Sends raw input (keys, escape sequences) to the session's iTerm tab. Keys typed while a send is in flight
+    /// are batched into the next one; the screen is refreshed right after each send.
+    func send(_ input: String) {
+        guard !input.isEmpty else { return }
+        pending += input
+        flush()
+    }
+
+    private func flush() {
+        guard !sending, !pending.isEmpty else { return }
+        sending = true
+        let text = pending
+        pending = ""
+        Self.queue.async {
+            _ = self.act("send", text)
+            DispatchQueue.main.async {
+                self.sending = false
+                if !self.pending.isEmpty { self.flush() }
+                Task { await self.refresh() }
             }
         }
-        if let error = result.2 { failure = error; return }
+    }
+
+    // MARK: Screen
+
+    func refresh() async {
+        let out: String? = await withCheckedContinuation { cont in
+            Self.queue.async { cont.resume(returning: self.act("read")) }
+        }
+        guard let out, let sep = out.firstIndex(of: "\u{1E}") else {
+            failure = "Onglet iTerm introuvable."
+            return
+        }
         failure = nil
-        tabName = result.0 ?? ""
-        let cleaned = Self.clean(result.1 ?? "")
+        tabName = String(out[..<sep])
+        let cleaned = Self.clean(String(out[out.index(after: sep)...]))
         if cleaned != rows { rows = cleaned }
     }
 

@@ -315,9 +315,11 @@ struct SessionDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
 
-                // The session's terminal, mirrored live from its iTerm tab.
-                TerminalMirrorView(session: session, live: store.live[session.info.id])
-                    .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 4)
+                // The session's terminal, mirrored live from its iTerm tab (accordion with the messages below).
+                Block(title: "Terminal", note: store.live[session.info.id]?.pid != nil ? "clic pour taper" : "journal") {
+                    TerminalMirrorView(session: session, live: store.live[session.info.id])
+                }
+                .padding(.top, 10)
                 ChatPanel(session: session)
                 Block(title: "Contexte", note: store.context(of: session).exact ? "exact" : "d'après le journal") {
                     let ctx = store.context(of: session)
@@ -564,6 +566,8 @@ struct RecipientPicker: View {
     @Environment(UsageStore.self) private var store
     let selfName: String
     let others: [LiveSession]
+    /// Recent closed sessions: writing to one relaunches it in the background with its history.
+    var closed: [SessionStat] = []
     @Binding var recipientID: String?
     @Binding var open: Bool
 
@@ -577,7 +581,7 @@ struct RecipientPicker: View {
                     Text(current?.name ?? "\(selfName) (cette session)")
                         .font(.system(size: 12.5, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.ink).lineLimit(1)
                     Spacer(minLength: 6)
-                    if !others.isEmpty {
+                    if !others.isEmpty || !closed.isEmpty {
                         Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.inkSoft)
                             .rotationEffect(.degrees(open ? 180 : 0))
                     }
@@ -588,7 +592,7 @@ struct RecipientPicker: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(others.isEmpty)
+            .disabled(others.isEmpty && closed.isEmpty)
 
             if open {
                 VStack(spacing: 0) {
@@ -596,6 +600,17 @@ struct RecipientPicker: View {
                     ForEach(others, id: \.sessionId) { o in
                         Rectangle().fill(Theme.rule).frame(height: 0.5).padding(.leading, 34)
                         option(id: o.sessionId, name: o.name, subtitle: subtitle(o), color: Self.color(o))
+                    }
+                    if !closed.isEmpty {
+                        Text("SESSIONS FERMÉES · RELANCÉES EN ARRIÈRE-PLAN").font(Theme.sans(9.5, .bold)).tracking(0.5)
+                            .foregroundStyle(Theme.inkFaint)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
+                        ForEach(closed) { s in
+                            option(id: s.info.id, name: s.name,
+                                   subtitle: [s.info.branch, OverviewView.ago(Date(timeIntervalSince1970: s.info.last))].compactMap { $0 }.joined(separator: " · "),
+                                   color: Color.gray)
+                        }
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.paper))
