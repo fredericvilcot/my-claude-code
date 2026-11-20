@@ -1,0 +1,199 @@
+import AppKit
+import AVFoundation
+import Speech
+import CoreGraphics
+import SwiftUI
+
+/// Pure AppKit entry point: no SwiftUI scene, hence no stray window.
+@main
+enum MyClaudeCodeMain {
+    static func main() {
+        UserDefaults.standard.register(defaults: ["refreshInterval": 15.0, "menuBarStyle": "both",
+                                                  "alertThreshold": 70.0, "alertOpensPanel": true, "usagePollInterval": 60.0, "notify.finished": true, "notify.waiting": true,
+                                                  "notify.context": true, "notify.quota": true, "notify.digest": true])
+        if CommandLine.arguments.contains("--dump") {
+            let c = UsageCache()
+            _ = c
+            Diagnostics.dump()
+            exit(0)
+        }
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        withExtendedLifetime(delegate) { app.run() }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        LimitAlerts.shared.setUp()
+        ClaudeCodeLink.refreshScriptIfNeeded()
+        PanelController.shared.install()
+        UsageStore.shared.start()
+        Task { @MainActor in AttentionCenter.shared.startDigest() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { MiniWindows.shared.restore() }
+        if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count {
+            let path = CommandLine.arguments[i + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { PanelController.shared.openPanel() }
+            if let t = CommandLine.arguments.firstIndex(of: "--tab"), t + 1 < CommandLine.arguments.count {
+                let tab = CommandLine.arguments[t + 1]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { NotificationCenter.default.post(name: .selectTab, object: tab) }
+            }
+            if CommandLine.arguments.contains("--minis") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    MiniWindows.shared.open(.quotas)
+                    if let s = UsageStore.shared.snapshot.current { MiniWindows.shared.open(.session(s.info.id)) }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 7.5) { MiniWindows.shared.capture(prefix: path.replacingOccurrences(of: ".png", with: "")) }
+            }
+            if CommandLine.arguments.contains("--session-detail") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    if let s = UsageStore.shared.snapshot.current { NotificationCenter.default.post(name: .openSession, object: s.index) }
+                }
+            }
+            if CommandLine.arguments.contains("--notifications") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { NotificationCenter.default.post(name: .openNotifications, object: nil) }
+            }
+            if CommandLine.arguments.contains("--quick") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { NotificationCenter.default.post(name: .openQuick, object: false) }
+                if CommandLine.arguments.contains("--picker") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { NotificationCenter.default.post(name: .openPicker, object: nil) }
+                }
+            }
+            if CommandLine.arguments.contains("--demo-attention") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { AttentionCenter.shared.injectDemo(UsageStore.shared) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                PanelController.shared.capture(to: path)
+                NSApp.terminate(nil)
+            }
+        }
+        if CommandLine.arguments.contains("--diag-voice") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                let d = Dictation()
+                d.start()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                    PanelController.debug("dictée : fin du test, texte=« \(d.transcript) » erreur=\(d.error ?? "aucune")")
+                    d.stop()
+                }
+            }
+        }
+        if CommandLine.arguments.contains("--tip-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { PanelController.shared.openPanel() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                print(Tooltip.shared.debugShow("Prévision d'après votre profil d'activité heure par heure (4 dernières semaines) et l'intensité de cette semaine."))
+                let path = NSTemporaryDirectory() + "mcc-tip-test.png"
+                PanelController.shared.capture(to: path)
+                exit(0)
+            }
+        }
+        if CommandLine.arguments.contains("--forecast") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                let store = UsageStore.shared
+                for w in store.plan?.all ?? [] {
+                    let f = w.forecast
+                    print(w.shortName, "officiel", w.usedPercent, "· en direct", f.map { String(format: "%.1f", $0.livePercent) } ?? "—",
+                          "· à la réinit.", f.map { String(format: "%.1f", $0.atReset) } ?? "—",
+                          "· épuisement", f?.exhaustion.map { $0.formatted() } ?? "aucun")
+                }
+                if let week = store.plan?.week {
+                    for h in [0.0, 0.5, 1, 2, 4] {
+                        let f = Forecaster.forecast(week, observedAt: store.plan?.updatedAt ?? Date(), snapshot: store.snapshot,
+                                                    history: UsageHistory.samples, now: Date().addingTimeInterval(h * 3600))
+                        print("si inactif pendant", h, "h → épuisement", f?.exhaustion.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "aucun",
+                              String(format: "· %.1f %% à la réinit.", f?.atReset ?? 0))
+                    }
+                    let now = Date().timeIntervalSince1970
+                    let lastHour = store.snapshot.costSeries.filter { $0.t > now - 3600 }.reduce(0) { $0 + $1.cost }
+                    print(String(format: "consommation de la dernière heure : %.2f $", lastHour))
+                    print(Forecaster.backtest(series: store.snapshot.costSeries, weekEnd: week.resetsAt.timeIntervalSince1970))
+                }
+                exit(0)
+            }
+        }
+        if CommandLine.arguments.contains("--diag") {
+            // Self-test of dictation permissions and of prompt sending, results on stderr.
+            func say(_ s: String) { FileHandle.standardError.write((s + "\n").data(using: .utf8)!) }
+            say("micro : \(AVCaptureDevice.authorizationStatus(for: .audio).rawValue) (0 non demandé, 1 restreint, 2 refusé, 3 autorisé)")
+            say("reconnaissance vocale : \(SFSpeechRecognizer.authorizationStatus().rawValue) (0 non demandé, 1 refusé, 2 restreint, 3 autorisé)")
+            say("recognizer fr-FR disponible : \(SFSpeechRecognizer(locale: Locale(identifier: "fr-FR"))?.isAvailable ?? false)")
+            Task {
+                let live = LiveSessions.fetch()
+                say("sessions vues : \(live.values.map(\.name))")
+                // Target: the session named by --diag-target, else the first interactive one.
+                let wanted = CommandLine.arguments.firstIndex(of: "--diag-target").flatMap { $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1] : nil }
+                guard let target = live.values.first(where: { wanted.map($0.name.hasPrefix) ?? ($0.kind == "interactive" && !$0.name.hasPrefix("my-claude-code")) })
+                else { say("cible absente"); exit(1) }
+                let stat = SessionStat(index: 0, info: SessionInfo(id: target.sessionId, project: "", branch: nil, first: 0, last: 0))
+                let t0 = Date()
+                let outcome = await PromptSender.send("[diagnostic My Claude Code] test d'envoi, aucune action requise.", to: stat, live: target)
+                say("envoi : \(outcome) en \(Int(Date().timeIntervalSince(t0))) s")
+                exit(0)
+            }
+        }
+        if CommandLine.arguments.contains("--bench-menu") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { PanelController.shared.benchMenu() }
+        }
+        if CommandLine.arguments.contains("--bench") {
+            // Times a full layout + render of the dashboard, as when the menu or panel opens.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                for run in 1...4 {
+                    let start = Date()
+                    let view = NSHostingView(rootView: DashboardView().environment(UsageStore.shared))
+                    view.sizingOptions = []
+                    view.frame = NSRect(x: 0, y: 0, width: 400, height: 900)
+                    view.layoutSubtreeIfNeeded()
+                    let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    print(String(format: "rendu %d : %.0f ms", run, Date().timeIntervalSince(start) * 1000))
+                }
+                let fm = Date()
+                for _ in 0..<20 { _ = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) }
+                print(String(format: "détection plein écran : %.1f ms", Date().timeIntervalSince(fm) * 1000 / 20))
+                exit(0)
+            }
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-day"), i + 1 < CommandLine.arguments.count {
+            let path = CommandLine.arguments[i + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                let r = ImageRenderer(content: DayBlock().environment(UsageStore.shared).frame(width: 400).background(Theme.paper))
+                r.scale = 2
+                if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                }
+                exit(0)
+            }
+        }
+        if CommandLine.arguments.contains("--open") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { PanelController.shared.openPanel() }
+        }
+    }
+}
+
+enum Diagnostics {
+    /// `MyClaudeCode --dump`: parses everything synchronously and prints the totals.
+    static func dump() {
+        let started = Date()
+        var cache = UsageCache()
+        var seen = Set<String>()
+        var sessions: [String: Int] = [:], models: [String: Int] = [:]
+        let files = UsageLog.listFiles()
+        for f in files {
+            for p in UsageLog.parse(path: f.path, from: 0).records where seen.insert(p.key).inserted {
+                let s = sessions[p.session] ?? { cache.sessions.append(SessionInfo(id: p.session, project: p.cwd, branch: p.branch, first: p.t, last: p.t)); sessions[p.session] = cache.sessions.count - 1; return cache.sessions.count - 1 }()
+                cache.sessions[s].first = min(cache.sessions[s].first, p.t); cache.sessions[s].last = max(cache.sessions[s].last, p.t)
+                let m = models[p.model] ?? { cache.models.append(p.model); models[p.model] = cache.models.count - 1; return cache.models.count - 1 }()
+                cache.records.append(UsageRecord(t: p.t, s: s, m: m, i: p.i, o: p.o, w5: p.w5, w1: p.w1, r: p.r, f: p.fast, sc: p.sidechain))
+            }
+        }
+        cache.records.sort { $0.t < $1.t }
+        let snap = UsageStore.aggregate(cache)
+        print("files \(files.count) · records \(cache.records.count) · \(String(format: "%.1f", Date().timeIntervalSince(started))) s")
+        print("today \(Fmt.usd(snap.today.cost.total)) \(Fmt.tokens(snap.today.tokens)) · 7d \(Fmt.usd(snap.week.cost.total)) · 30d \(Fmt.usd(snap.month.cost.total)) · all \(Fmt.usd(snap.all.cost.total))")
+        print("models", snap.models.prefix(6).map { "\(Fmt.model($0.name)) \(Fmt.usd($0.cost))\($0.estimated ? " (estimé)" : "")" })
+        print("current", snap.current.map { "\($0.name) \(Fmt.usd($0.totals.cost.total))" } ?? "none",
+              "· window", snap.window.map { "\(Fmt.usd($0.cost)) reset \(Fmt.time($0.reset)) peak \($0.typicalPeak.map(Fmt.usd) ?? "-")" } ?? "none")
+        print("streak \(snap.streak) · active days \(snap.activeDays) · savings \(Fmt.usd(snap.cacheSavings))")
+    }
+}
