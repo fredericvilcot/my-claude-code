@@ -48,8 +48,10 @@ terminal, an in-app notification center and a voice-ready quick command — one 
 
 - An Apple Silicon Mac (M1 or later) running **macOS 14 Sonoma or later**.
 - **Claude Code** installed, with `claude` on your `PATH`.
-- **[iTerm2](https://iterm2.com)** *(recommended)* for the terminal mirror, new projects, compaction and
-  resuming sessions. Everything else works without it.
+- **[iTerm2](https://iterm2.com)** *(recommended)* for the mirror of interactive sessions, new projects and resuming
+  sessions. Background sessions get a real terminal inside the app (`claude attach`), with or without iTerm2.
+  For the mirror to show iTerm's colours (and to type into a tab even while the hotkey window is hidden), turn on
+  **iTerm2 › Settings › General › Magic › Enable Python API** — no Python needed; without it the mirror is plain text.
 - No administrator rights are needed.
 
 ## Installation
@@ -211,7 +213,9 @@ inter-session messages all work; terminals are rebuilt from transcripts.
 
 ## Building from source
 
-Requires Apple's developer tools (Xcode, or `xcode-select --install`). No other dependency.
+Requires Apple's developer tools (Xcode, or `xcode-select --install`), Swift 5.10 or later. No other dependency: the
+terminal emulator ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), MIT) is vendored in `Vendor/` and built by the
+script (once, then only when its sources change).
 
 ```sh
 git clone https://github.com/fredericvilcot/my-claude-code.git
@@ -231,6 +235,7 @@ Sources/App/     AppKit entry point, menu bar panel, floating windows
 Sources/Data/    transcripts, /usage, forecasts, sessions, notifications, iTerm mirror
 Sources/Views/   SwiftUI views: tabs, cards, terminal, notification center, quick command
 Resources/       Info.plist, app icon
+Vendor/SwiftTerm vendored terminal emulator (MIT), used for background sessions (`claude attach`)
 build.sh         build, sign, install
 ```
 
