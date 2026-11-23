@@ -175,7 +175,11 @@ final class PanelController: NSObject, NSMenuDelegate {
         resetIfStale()
         let afterReset = ProcessInfo.processInfo.systemUptime
         guard let item else { return }
-        let size = NSSize(width: 400, height: min((NSScreen.main?.frame.height ?? 900) - 60, 900))
+        // Full height of the display that was clicked (no cap: an ultra-wide screen is taller than a laptop's).
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? item.button?.window?.screen ?? NSScreen.main
+        let menuBar = max(24, (screen?.frame.maxY ?? 0) - (screen?.visibleFrame.maxY ?? 0))
+        let size = NSSize(width: 400, height: max(400, (screen?.frame.height ?? 900) - menuBar - 12))
         menuContainer.frame = NSRect(origin: .zero, size: size)
         // One live dashboard, kept inside the menu between openings: it shows at once with its last state and
         // updates in place (no snapshot of the panel, no rebuild).
@@ -243,7 +247,10 @@ final class PanelController: NSObject, NSMenuDelegate {
         AppActivity.shared.set(menu: true)
         guard let t = menuTiming else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        Self.debug(String(format: "menu : clic→code %@ · remise à zéro %.0f ms · préparation %.0f ms · ouverture %.0f ms",
+        Self.debug(String(format: "menu %.0f×%.0f sur écran %.0f×%.0f : clic→code %@ · remise à zéro %.0f ms · préparation %.0f ms · ouverture %.0f ms",
+                          menuContainer.frame.width, menuContainer.frame.height,
+                          NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.frame.width ?? 0,
+                          NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.frame.height ?? 0,
                           t.click.map { String(format: "%.0f ms", $0 * 1000) } ?? "—", t.reset * 1000, t.picture * 1000,
                           (now - t.start - t.reset - t.picture) * 1000))
     }
