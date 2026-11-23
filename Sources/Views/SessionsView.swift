@@ -29,11 +29,15 @@ struct SessionsView: View {
     private var period: SessionPeriod { SessionPeriod(rawValue: periodRaw) ?? .week }
 
     var body: some View {
-        if let index = selected, let s = store.snapshot.sessions.first(where: { $0.index == index }) {
-            SessionDetailView(session: s, back: { withAnimation(.snappy) { selected = nil } })
-        } else {
-            list
+        Group {
+            if let index = selected, let s = store.snapshot.sessions.first(where: { $0.index == index }) {
+                SessionDetailView(session: s, back: { withAnimation(.snappy) { selected = nil } })
+            } else {
+                list
+            }
         }
+        // Back from a session (deleted there, or elsewhere): the list re-reads which sessions are deleted.
+        .onChange(of: selected) { _, _ in hiddenSessions = SessionFiles.hidden }
     }
 
     @State private var hiddenSessions = SessionFiles.hidden
