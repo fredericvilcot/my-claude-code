@@ -90,9 +90,7 @@ final class AttentionCenter {
             let isNew = !items.contains { $0.id == key } && !dismissed.contains(key)
             add(AttentionItem(id: key, kind: .quota, sessionID: nil, title: "\(name) à \(Int(w.usedPercent.rounded())) %", detail: detail, date: Date()),
                 show: "notify.quota")
-            if isNew, over, UserDefaults.standard.bool(forKey: "alertOpensPanel"), !PanelController.shared.isOpen {
-                PanelController.shared.openPanel()
-            }
+            _ = (isNew, over)   // the panel never opens by itself: the menu bar count tells
         }
         remove { $0.id.hasPrefix("limit-") && !current.contains($0.id) }
     }

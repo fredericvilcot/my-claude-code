@@ -32,6 +32,6 @@ if [[ "${1:-}" == "--install" ]]; then
   mkdir -p "$DEST"
   pkill -x MyClaudeCode 2>/dev/null || true; sleep 0.5
   rm -rf "$DEST/My Claude Code.app"; cp -R "$APP" "$DEST/"
-  open "$DEST/My Claude Code.app" --args --open
+  open "$DEST/My Claude Code.app"
   echo "Installed to $DEST/My Claude Code.app"
 fi

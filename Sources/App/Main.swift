@@ -9,7 +9,7 @@ import SwiftUI
 enum MyClaudeCodeMain {
     static func main() {
         UserDefaults.standard.register(defaults: ["refreshInterval": 15.0, "menuBarStyle": "both",
-                                                  "alertThreshold": 70.0, "alertOpensPanel": true, "usagePollInterval": 60.0, "notify.finished": true, "notify.waiting": true,
+                                                  "alertThreshold": 70.0, "usagePollInterval": 60.0, "notify.finished": true, "notify.waiting": true,
                                                   "notify.context": true, "notify.quota": true, "notify.digest": true])
         if CommandLine.arguments.contains("--dump") {
             let c = UsageCache()
@@ -135,6 +135,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let t0 = Date()
                 let outcome = await PromptSender.send("[diagnostic My Claude Code] test d'envoi, aucune action requise.", to: stat, live: target)
                 say("envoi : \(outcome) en \(Int(Date().timeIntervalSince(t0))) s")
+                exit(0)
+            }
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--render-menubar"), i + 1 < CommandLine.arguments.count {
+            // Render check of the menu bar label with 0, 1, 12 and 120 notifications, on light and dark bars.
+            let path = CommandLine.arguments[i + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                let base = MenuBarLabel.render(session: 14, week: 91, threshold: 70, active: true)
+                let rows = [0, 1, 12, 120].map { $0 == 0 ? base : PanelController.withCount(base, $0) }
+                let width = (rows.map(\.size.width).max() ?? 100) + 24, rowH: CGFloat = 26
+                let out = NSImage(size: NSSize(width: width * 2, height: rowH * CGFloat(rows.count)), flipped: true) { _ in
+                    for (col, name) in [NSAppearance.Name.aqua, .darkAqua].enumerated() {
+                        NSAppearance(named: name)!.performAsCurrentDrawingAppearance {
+                            (col == 0 ? NSColor(white: 0.93, alpha: 1) : NSColor(white: 0.16, alpha: 1)).setFill()
+                            NSRect(x: CGFloat(col) * width, y: 0, width: width, height: rowH * CGFloat(rows.count)).fill()
+                            for (r, img) in rows.enumerated() {
+                                img.draw(in: NSRect(x: CGFloat(col) * width + 12, y: CGFloat(r) * rowH + (rowH - img.size.height) / 2,
+                                                    width: img.size.width, height: img.size.height),
+                                         from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                            }
+                        }
+                    }
+                    return true
+                }
+                let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(out.size.width * 2), pixelsHigh: Int(out.size.height * 2),
+                                           bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                rep.size = out.size
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                out.draw(in: NSRect(origin: .zero, size: out.size))
+                NSGraphicsContext.restoreGraphicsState()
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
                 exit(0)
             }
         }

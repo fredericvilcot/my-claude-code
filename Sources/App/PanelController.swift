@@ -433,13 +433,37 @@ final class PanelController: NSObject, NSMenuDelegate {
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
     }
 
-    /// Adds a small clay dot at the top-right of the menu bar image.
-    private static func withDot(_ image: NSImage) -> NSImage {
-        let size = NSSize(width: image.size.width + 5, height: image.size.height)
+    /// Appends the number of notifications, in a small clay badge (white figures), to the menu bar image.
+    /// A template image keeps following the menu bar's light/dark appearance (tinted with the label colour).
+    static func withCount(_ image: NSImage, _ count: Int) -> NSImage {
+        let text = count > 99 ? "99+" : "\(count)"
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .bold)
+        let label = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.white])
+        let textSize = label.size()
+        let badge = NSSize(width: max(15, ceil(textSize.width) + 9), height: 15)
+        let gap: CGFloat = 4
+        let size = NSSize(width: image.size.width + gap + badge.width, height: max(image.size.height, badge.height))
         let out = NSImage(size: size, flipped: false) { _ in
-            image.draw(in: NSRect(origin: .zero, size: image.size))
+            let imageRect = NSRect(x: 0, y: (size.height - image.size.height) / 2, width: image.size.width, height: image.size.height)
+            if image.isTemplate {
+                NSGraphicsContext.saveGraphicsState()
+                image.draw(in: imageRect)
+                NSColor.labelColor.set()
+                imageRect.fill(using: .sourceAtop)
+                NSGraphicsContext.restoreGraphicsState()
+            } else {
+                image.draw(in: imageRect)
+            }
+            let rect = NSRect(x: image.size.width + gap, y: (size.height - badge.height) / 2, width: badge.width, height: badge.height)
             NSColor(red: 0xD9/255, green: 0x77/255, blue: 0x57/255, alpha: 1).setFill()
-            NSBezierPath(ovalIn: NSRect(x: size.width - 5.5, y: size.height - 6.5, width: 5.5, height: 5.5)).fill()
+            NSBezierPath(roundedRect: rect, xRadius: badge.height / 2, yRadius: badge.height / 2).fill()
+            // Centre the figures on their drawn shape (glyph bounds), not on the font's line box, which sits them low.
+            if let ctx = NSGraphicsContext.current?.cgContext {
+                let line = CTLineCreateWithAttributedString(label)
+                let ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+                ctx.textPosition = CGPoint(x: rect.midX - ink.midX, y: rect.midY - ink.midY)
+                CTLineDraw(line, ctx)
+            }
             return true
         }
         out.isTemplate = false
@@ -471,7 +495,7 @@ final class PanelController: NSObject, NSMenuDelegate {
             button.attributedTitle = NSAttributedString(string: text, attributes: attrs)
         }
         let pending = MainActor.assumeIsolated { AttentionCenter.shared.items.count }
-        if pending > 0, let image = button.image { button.image = Self.withDot(image) }
+        if pending > 0, let image = button.image { button.image = Self.withCount(image, pending) }
         button.toolTip = (pending > 0 ? "\(pending) élément\(pending > 1 ? "s" : "") à traiter · " : "") + "My Claude Code — session \(session.map { "\(Int($0)) %" } ?? "—") · semaine \(week.map { "\(Int($0)) %" } ?? "—") · aujourd'hui \(Fmt.usd(snap.today.cost.total))"
     }
 }

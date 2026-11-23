@@ -5,7 +5,6 @@ struct SettingsView: View {
     @Environment(UsageStore.self) private var store
     @AppStorage("menuBarStyle") private var style = "both"
     @AppStorage("alertThreshold") private var threshold = 70.0
-    @AppStorage("alertOpensPanel") private var opensPanel = true
     @AppStorage("usagePollInterval") private var pollInterval = 60.0
     @AppStorage("notify.finished") private var nFinished = true
     @AppStorage("notify.waiting") private var nWaiting = true
@@ -73,7 +72,6 @@ struct SettingsView: View {
                     HStack { Text("Alerte à partir de"); Spacer(); Text("\(Int(threshold)) %").monospacedDigit().foregroundStyle(.secondary) }
                     Slider(value: Binding(get: { threshold }, set: { threshold = ($0 / 5).rounded() * 5 }), in: 50...95).controlSize(.small)
                 }
-                Toggle("Ouvrir le panneau automatiquement en cas d'alerte", isOn: $opensPanel)
                 LabeledContent("Actualiser /usage toutes les") {
                     Picker("", selection: $pollInterval) {
                         Text("1 min").tag(60.0)
