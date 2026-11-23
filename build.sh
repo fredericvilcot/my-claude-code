@@ -12,6 +12,11 @@ if [[ ! -f $ST/libSwiftTerm.a || -n $(find Vendor/SwiftTerm/Sources -newer $ST/l
     -emit-module -emit-module-path $ST/SwiftTerm.swiftmodule -emit-library -static -o $ST/libSwiftTerm.a \
     Vendor/SwiftTerm/Sources/**/*.swift
 fi
+# Architecture (hexagonal): the domain compiles alone, and the core (domain, ports, use cases) compiles without any
+# adapter or UI, Foundation only. A dependency pointing the wrong way breaks the build here.
+if grep -rlE '^import (AppKit|SwiftUI|SwiftTerm|Charts)' Sources/Core; then echo "Core must only import Foundation"; exit 1; fi
+swiftc -typecheck -parse-as-library -target arm64-apple-macos14.0 Sources/Core/Domain/*.swift
+swiftc -typecheck -parse-as-library -target arm64-apple-macos14.0 Sources/Core/**/*.swift
 swiftc -O -parse-as-library -target arm64-apple-macos14.0 \
   -I $ST -L $ST -lSwiftTerm \
   -framework AppKit -framework SwiftUI -framework Charts -framework ServiceManagement -framework Speech -framework AVFoundation \

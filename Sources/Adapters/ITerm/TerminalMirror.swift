@@ -8,7 +8,7 @@ import Observation
 @Observable
 final class TerminalMirror {
     /// A mirrored screen line: text, or a horizontal rule (Claude Code's separators, drawn natively).
-    enum Row: Equatable { case text(String), rule }
+    typealias Row = TerminalRow
     /// The screen, line by line, exactly as iTerm shows it (only trailing blanks dropped).
     private(set) var lines: [String] = []
     /// The same screen with iTerm's colours and styles (iTerm API enabled), else nil.

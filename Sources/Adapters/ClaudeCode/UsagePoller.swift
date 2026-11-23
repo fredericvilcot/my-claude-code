@@ -3,12 +3,7 @@ import Foundation
 /// Polls `claude -p /usage` in the background (no model call, zero cost, no session saved)
 /// to get the exact /usage figures even when no Claude Code session is active.
 enum UsagePoller {
-    struct Result {
-        var windows: [PlanUsage.Window] = []
-        var header: String?
-        var contributors: [(Int, String)] = []
-        var date = Date()
-    }
+    typealias Result = UsageReading
 
     static var claudePath: String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path

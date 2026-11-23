@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import Observation
 
 /// "Relancer à neuf": hands a session over to a fresh one, without ever losing anything.
@@ -10,7 +10,10 @@ import Observation
 @MainActor
 @Observable
 final class Restarter {
-    static let shared = Restarter()
+    /// Set by the composition root (App/Composition.swift).
+    static var shared: Restarter!
+    private let ports: HandOverPorts
+    init(ports: HandOverPorts) { self.ports = ports }
 
     enum Step: Equatable {
         case writingNote, opening, switching
@@ -28,19 +31,16 @@ final class Restarter {
 
     func restart(_ session: SessionStat, live: LiveSession) {
         let id = session.info.id
-        guard !isBusy(id), !Compactor.shared.isBusy(id) else { return }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let dir = FileManager.default.fileExists(atPath: session.info.project) ? session.info.project : home.path
-        let notes = home.appendingPathComponent(".claude/session-notes")
-        try? FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        guard !isBusy(id), Compactor.shared?.isBusy(id) != true else { return }
+        let dir = ports.notes.folderExists(session.info.project) ? session.info.project : ports.notes.home
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd-HHmm"
         let folder = (dir as NSString).lastPathComponent
-        let note = notes.appendingPathComponent("\(folder.isEmpty ? "session" : folder)-\(f.string(from: Date()))-reprise.md").path
+        let note = ports.notes.newNotePath(folder: folder.isEmpty ? "session" : folder, suffix: f.string(from: Date()) + "-reprise")
         let ask = "Cette session va être fermée et reprise dans une nouvelle session. Rédige maintenant une note de synthèse complète "
             + "dans \(note) : objectif, ce qui est fait, ce qui reste à faire, décisions prises, fichiers clés, commandes utiles, "
             + "points d'attention et prochaine étape précise. Puis réponds seulement « note prête »."
         steps[id] = .writingNote
-        SessionInput.type(ask, into: live) { [weak self] error in
+        ports.typing.type(ask, into: live) { [weak self] error in
             guard let self else { return }
             if let error { self.steps[id] = .failed(error); return }
             self.waitForNote(id, job: live.kind == "background" ? live.shortId : nil, note: note) {
@@ -57,7 +57,7 @@ final class Restarter {
             + "Lis d'abord en entier la note de synthèse \(note), puis continue exactement là où le travail s'était arrêté, "
             + "sans refaire ce qui est déjà fait. Commence par résumer en trois lignes où nous en sommes."
         // Same model as the session it replaces.
-        SessionLauncher.startProject(in: dir, prompt: resume, model: session.lastModel.isEmpty ? nil : session.lastModel) { [weak self] error in
+        ports.launcher.start(in: dir, prompt: resume, model: session.lastModel.isEmpty ? nil : session.lastModel) { [weak self] error in
             guard let self else { return }
             if let error { self.steps[id] = .failed(error); return }
             self.waitForNewSession(after: started, in: dir, excluding: id) { newID in
@@ -66,37 +66,20 @@ final class Restarter {
                     return
                 }
                 self.steps[id] = .switching
-                self.retire(session, live: live)
+                self.ports.retirement.retire(session, live: live)
                 self.switchTo(newID, from: id)
             }
         }
     }
 
-    /// Stops the old session, closes its tab, trashes its transcript. Called only once the new one runs.
-    private func retire(_ session: SessionStat, live: LiveSession) {
-        if live.kind == "background" {
-            BackgroundJobs.stopAndRemove(live.shortId) { UsageStore.shared.refreshAll() }
-        } else if let pid = live.pid, pid > 1 {
-            let tty = Compactor.tty(of: pid)
-            kill(pid, SIGTERM)
-            if let tty { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { SessionInput.closeITermTab(tty: tty) } }
-        }
-        SessionFiles.delete(session)
-        UsageStore.shared.refreshAll()
-    }
 
     /// Opens the new session's sheet (and swaps the floating window) as soon as its statistics exist.
     private func switchTo(_ newID: String, from oldID: String) {
         let start = Date()
         poll(oldID, every: 1) { [weak self] in
             guard let self else { return true }
-            let store = UsageStore.shared
-            if let stat = store.snapshot.sessions.first(where: { $0.info.id == newID }) {
-                if MiniWindows.shared.isOpen(.session(oldID)) {
-                    MiniWindows.shared.close(.session(oldID))
-                    MiniWindows.shared.open(.session(newID))
-                }
-                NotificationCenter.default.post(name: .openSession, object: stat.index)
+            if let stat = self.ports.state.stat(of: newID) {
+                self.ports.presenter.present(stat, replacing: oldID)
                 self.steps[oldID] = .done(newID)
                 return true
             }
@@ -114,11 +97,11 @@ final class Restarter {
         let start = Date()
         poll(id, every: 2) { [weak self] in
             guard let self else { return true }
-            let phase = Compactor.turnPhase(id, job: job)
+            let phase = self.ports.state.phase(of: id, job: job)
             if phase == nil { self.steps[id] = .failed("La session s'est fermée avant d'écrire la note."); return true }
             if phase == 0 { sawBusy = true; idleSince = nil; return false }
             if sawBusy || Date().timeIntervalSince(start) > 30 {
-                if FileManager.default.fileExists(atPath: note) { then(); return true }
+                if self.ports.notes.exists(note) { then(); return true }
                 idleSince = idleSince ?? Date()
                 if Date().timeIntervalSince(idleSince!) > 30 {
                     self.steps[id] = .failed("La note de synthèse n'a pas été écrite : rien n'a été fermé.")
@@ -133,20 +116,9 @@ final class Restarter {
     /// The new interactive session: started in `dir` after `date`, read from Claude Code's session files (2 min at most).
     private func waitForNewSession(after date: Date, in dir: String, excluding old: String, then: @escaping (String?) -> Void) {
         let start = Date()
-        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/sessions")
-        // Claude Code records its real working directory: compare resolved paths (symlinked folders).
-        let target = URL(fileURLWithPath: dir).resolvingSymlinksInPath().path
-        poll(old, every: 1) {
-            let files = (try? FileManager.default.contentsOfDirectory(at: sessionsDir, includingPropertiesForKeys: nil)) ?? []
-            for url in files where url.pathExtension == "json" {
-                guard let data = try? Data(contentsOf: url),
-                      let s = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                      let sid = s["sessionId"] as? String, sid != old,
-                      let cwd = s["cwd"] as? String, URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path == target,
-                      let startedAt = (s["startedAt"] as? NSNumber)?.doubleValue, startedAt / 1000 >= date.timeIntervalSince1970 - 2
-                else { continue }
-                then(sid); return true
-            }
+        poll(old, every: 1) { [weak self] in
+            guard let self else { return true }
+            if let sid = self.ports.state.newSession(in: dir, startedAfter: date, excluding: old) { then(sid); return true }
             if Date().timeIntervalSince(start) > 120 { then(nil); return true }
             return false
         }

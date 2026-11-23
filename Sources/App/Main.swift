@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) { UsageStore.shared.flushCache() }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated { Composition.install() }
         LimitAlerts.shared.setUp()
         ClaudeCodeLink.refreshScriptIfNeeded()
         PanelController.shared.install()

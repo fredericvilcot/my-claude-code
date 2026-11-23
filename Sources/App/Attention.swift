@@ -180,9 +180,6 @@ final class AttentionCenter {
 }
 
 extension PlanUsage.Window {
-    /// Length of the quota window.
-    var span: TimeInterval { kind == .session ? 5 * 3600 : 7 * 86400 }
-
     /// When the quota runs out before its reset, per the forecast (see Forecaster).
     var exhaustion: Date? { forecast?.exhaustion }
 }

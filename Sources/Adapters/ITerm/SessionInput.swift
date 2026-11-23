@@ -30,7 +30,7 @@ enum SessionInput {
     static func type(_ text: String, into live: LiveSession, completion: @escaping (String?) -> Void) {
         if live.kind == "background" {
             AttachTyper.type(text, job: live.shortId, completion: completion)
-        } else if let pid = live.pid, let tty = Compactor.tty(of: pid) {
+        } else if let pid = live.pid, let tty = Terminals.tty(of: pid) {
             typeInITerm(text, tty: tty, completion: completion)
         } else {
             completion("Session sans terminal joignable.")
@@ -194,6 +194,11 @@ final class AttachTyper: LocalProcessDelegate {
 
 /// Shared settings for terminals the app runs itself (`claude attach`).
 enum Terminals {
+    static func tty(of pid: Int32) -> String? {
+        let out = Shell.run("/bin/ps", ["-o", "tty=", "-p", "\(pid)"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return out.isEmpty || out.hasPrefix("?") ? nil : "/dev/" + out
+    }
+
     static func environment() -> [String] {
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"

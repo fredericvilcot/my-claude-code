@@ -152,7 +152,7 @@ struct TerminalMirrorView: View {
         if attachedJob != nil { mirror = nil; return }
         var tty: String?
         if let pid = SessionLineage.terminalPID(for: session.info.id, live: live) {
-            tty = await Task.detached(priority: .userInitiated) { Compactor.tty(of: pid) }.value
+            tty = await Task.detached(priority: .userInitiated) { Terminals.tty(of: pid) }.value
         }
         guard !Task.isCancelled else { return }
         guard let tty else {
