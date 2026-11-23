@@ -77,6 +77,9 @@ struct DashboardView: View {
             }
         }
         .tint(Theme.clay)
+        // The panel is non-activating: without the keyboard focus macOS would draw switches and pickers grey.
+        // They always keep their clay accent.
+        .environment(\.controlActiveState, .key)
         .onReceive(NotificationCenter.default.publisher(for: .openQuick)) { note in
             withAnimation(.snappy(duration: 0.2)) { quickOpen = true }
             if note.object as? Bool == true { quickDictate = true }

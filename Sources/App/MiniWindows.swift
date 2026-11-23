@@ -76,7 +76,8 @@ final class MiniWindows {
         effect.material = .popover
         effect.blendingMode = .behindWindow
         effect.state = .active
-        let hosting = NSHostingView(rootView: MiniWindowView(kind: kind).environment(UsageStore.shared))
+        let hosting = NSHostingView(rootView: MiniWindowView(kind: kind).environment(UsageStore.shared)
+            .tint(Theme.clay).environment(\.controlActiveState, .key))   // accent kept without keyboard focus
         hosting.sizingOptions = []
         hosting.frame = effect.bounds
         hosting.autoresizingMask = [.width, .height]

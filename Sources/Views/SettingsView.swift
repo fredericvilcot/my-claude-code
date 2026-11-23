@@ -29,11 +29,10 @@ struct SettingsView: View {
                         catch { self.error = error.localizedDescription }
                     }
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
-                Picker("Barre des menus", selection: $style) {
-                    Text("Session + semaine (%)").tag("both")
-                    Text("Coût du jour ($)").tag("today")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Barre des menus").foregroundStyle(Theme.ink)
+                    ClayRadio(selection: $style, options: [("both", "Session + semaine (%)"), ("today", "Coût du jour ($)")])
                 }
-                .pickerStyle(.radioGroup)
                 .onChange(of: style) { _, _ in PanelController.shared.refreshButton() }
             }
             Section {
@@ -44,16 +43,13 @@ struct SettingsView: View {
                 Toggle("Bilan de la journée", isOn: $nDigest)
                 if nDigest {
                     LabeledContent("Heure du bilan") {
-                        Picker("", selection: $digestHour) {
-                            ForEach([17, 18, 19, 20], id: \.self) { Text("\($0) h 30").tag($0) }
-                        }
-                        .pickerStyle(.segmented).labelsHidden().fixedSize()
+                        ClaySegmented(selection: $digestHour, options: [17, 18, 19, 20].map { ($0, "\($0) h 30") })
                     }
                 }
             } header: {
                 Text("Alertes")
             } footer: {
-                Text("Affichées uniquement dans le centre de notifications de l'app (la cloche en haut du panneau, détachable), jamais dans celui de macOS. Un point sur l'icône de la barre des menus signale qu'une notification attend.")
+                Text("Affichées uniquement dans le centre de notifications de l'app (la cloche en haut du panneau, détachable), jamais dans celui de macOS. Le nombre de notifications en attente s'affiche à côté de l'icône, dans la barre des menus.")
                     .font(.system(size: 10.5))
             }
             Section {
@@ -70,15 +66,10 @@ struct SettingsView: View {
                 }
                 VStack(alignment: .leading) {
                     HStack { Text("Alerte à partir de"); Spacer(); Text("\(Int(threshold)) %").monospacedDigit().foregroundStyle(.secondary) }
-                    Slider(value: Binding(get: { threshold }, set: { threshold = ($0 / 5).rounded() * 5 }), in: 50...95).controlSize(.small)
+                    ClaySlider(value: $threshold, range: 50...95, step: 5)
                 }
                 LabeledContent("Actualiser /usage toutes les") {
-                    Picker("", selection: $pollInterval) {
-                        Text("1 min").tag(60.0)
-                        Text("2 min").tag(120.0)
-                        Text("5 min").tag(300.0)
-                    }
-                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    ClaySegmented(selection: $pollInterval, options: [(60.0, "1 min"), (120.0, "2 min"), (300.0, "5 min")])
                 }
                 .onChange(of: pollInterval) { _, _ in store.schedulePolling() }
             } header: {
@@ -90,12 +81,7 @@ struct SettingsView: View {
             Section {
                 LabeledContent("Journaux de Claude Code", value: Fmt.bytes(totalSize))
                 LabeledContent("Sessions inactives depuis") {
-                    Picker("", selection: $cleanupDays) {
-                        Text("30 j").tag(30)
-                        Text("90 j").tag(90)
-                        Text("180 j").tag(180)
-                    }
-                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    ClaySegmented(selection: $cleanupDays, options: [(30, "30 j"), (90, "90 j"), (180, "180 j")])
                 }
                 LabeledContent("Concernées", value: "\(candidates.sessions.count) sessions · \(Fmt.bytes(candidates.bytes))")
                 if confirmCleanup {
@@ -138,6 +124,7 @@ struct SettingsView: View {
         .onAppear { refreshCleanup() }
         .onChange(of: cleanupDays) { _, _ in confirmCleanup = false; refreshCleanup() }
         .formStyle(.grouped)
+        .toggleStyle(ClaySwitchStyle())
         .scrollContentBackground(.hidden)
         .font(Theme.sans(12))
     }
