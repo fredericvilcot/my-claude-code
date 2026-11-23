@@ -228,7 +228,7 @@ struct LimitsContent: View {
             HStack(alignment: .center, spacing: 16) {
                 SessionHero(window: plan.session, threshold: threshold)
                 VStack(spacing: 12) {
-                    let known = UserDefaults.standard.stringArray(forKey: "knownScopedQuotas") ?? ["Fable"]
+                    let known = UserDefaults.standard.stringArray(forKey: "knownScopedQuotas") ?? []
                     if let w = plan.week { LimitRow(window: w, threshold: threshold) } else { LimitPlaceholder(name: "Semaine", detail: "tous modèles") }
                     ForEach(known, id: \.self) { name in
                         if let w = plan.scoped.first(where: { $0.shortName == name }) { LimitRow(window: w, threshold: threshold) }

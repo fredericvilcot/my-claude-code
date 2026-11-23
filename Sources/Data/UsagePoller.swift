@@ -17,7 +17,7 @@ enum UsagePoller {
     }
 
     static func fetch() -> Result? {
-        guard let claude = claudePath else { return nil }
+        guard let claude = claudePath, !Demo.isOn else { return nil }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: claude)
         task.arguments = ["-p", "/usage", "--output-format", "json", "--no-session-persistence"]

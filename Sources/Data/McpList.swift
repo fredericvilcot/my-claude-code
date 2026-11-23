@@ -19,7 +19,7 @@ struct McpInventory {
 enum McpList {
     /// `claude mcp list`: health of every configured server ("name: target - status").
     private static func health() -> [String: McpServer.Health] {
-        guard let claude = UsagePoller.claudePath else { return [:] }
+        guard let claude = UsagePoller.claudePath, !Demo.isOn else { return [:] }   // demo: never ask the real Claude Code
         let task = Process()
         task.executableURL = URL(fileURLWithPath: claude)
         task.arguments = ["mcp", "list"]

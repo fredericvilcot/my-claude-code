@@ -143,7 +143,7 @@ struct OverviewView: View {
                         SessionHero(window: plan.session, threshold: threshold)
                         VStack(spacing: 14) {
                             // Fixed slots: the weekly quota and every per-model quota seen before, placeholders until known.
-                            let known = UserDefaults.standard.stringArray(forKey: "knownScopedQuotas") ?? ["Fable"]
+                            let known = UserDefaults.standard.stringArray(forKey: "knownScopedQuotas") ?? []
                             if let w = plan.week { LimitRow(window: w, threshold: threshold) } else { LimitPlaceholder(name: "Semaine", detail: "tous modèles") }
                             ForEach(known, id: \.self) { name in
                                 if let w = plan.scoped.first(where: { $0.shortName == name }) {

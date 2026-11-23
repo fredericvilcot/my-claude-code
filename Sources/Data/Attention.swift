@@ -131,9 +131,9 @@ final class AttentionCenter {
         guard ids.count == 3 else { return }
         let now = Date()
         items = [
-            AttentionItem(id: "d1", kind: .waiting, sessionID: ids[0], title: "api-refacto attend votre réponse", detail: "elle a besoin de vous pour continuer", date: now.addingTimeInterval(-40)),
-            AttentionItem(id: "d2", kind: .finished, sessionID: ids[1], title: "vigie a terminé", detail: "après 12 min de travail", date: now.addingTimeInterval(-300)),
-            AttentionItem(id: "d3", kind: .context, sessionID: ids[2], title: "Contexte à 87 % sur docs", detail: "compaction automatique bientôt", date: now.addingTimeInterval(-600)),
+            AttentionItem(id: "d1", kind: .waiting, sessionID: ids[0], title: "Refonte de l'onboarding attend votre réponse", detail: "elle a besoin de vous pour continuer", date: now.addingTimeInterval(-40)),
+            AttentionItem(id: "d2", kind: .finished, sessionID: ids[1], title: "Migration vers Postgres 16 a terminé", detail: "après 12 min de travail", date: now.addingTimeInterval(-300)),
+            AttentionItem(id: "d3", kind: .context, sessionID: ids[2], title: "Contexte à 87 % sur shop-api", detail: "compaction automatique bientôt", date: now.addingTimeInterval(-600)),
         ]
     }
 

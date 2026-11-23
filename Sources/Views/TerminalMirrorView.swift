@@ -19,7 +19,7 @@ struct TerminalMirrorView: View {
     @State private var attachGeneration = 0
 
     private var attachedJob: String? {
-        guard let live, live.kind == "background", !live.shortId.isEmpty else { return nil }
+        guard let live, live.kind == "background", !live.shortId.isEmpty, !Demo.isOn else { return nil }   // demo: journal
         return live.shortId
     }
 

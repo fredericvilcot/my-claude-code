@@ -1,248 +1,250 @@
 <div align="center">
 
+<img src="docs/screenshots/icon.png" width="96" alt="">
+
 # My Claude Code
 
-**A macOS menu bar companion for [Claude Code](https://claude.com/claude-code).**
-Plan quotas and when they will run out, what every session is doing right now, a live mirror of its
-terminal, an in-app notification center and a voice-ready quick command — one click away.
+**Everything Claude Code is doing, one click away in your menu bar.**
 
-![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)
+Quotas and when they will run out · every session, live · its real terminal, in colour · notifications that
+never interrupt you · a quick command you can dictate — native, fast, and nearly free to run.
+
+![Platform](https://img.shields.io/badge/macOS-14%2B-lightgrey)
 ![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-lightgrey)
-![Swift](https://img.shields.io/badge/Swift-SwiftUI%20%2B%20AppKit-orange)
-![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)
+![Swift](https://img.shields.io/badge/SwiftUI%20%2B%20AppKit-orange)
+![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)
+
+<br>
+
+<img src="docs/screenshots/overview.png" width="270" alt="Direct tab: quotas and open sessions">&nbsp;&nbsp;
+<img src="docs/screenshots/session.png" width="270" alt="A session and its terminal">&nbsp;&nbsp;
+<img src="docs/screenshots/stats.png" width="270" alt="Statistics">
 
 </div>
 
-> The user interface is in French. Everything stays on your Mac: the app reads your local `~/.claude`
-> folder and sends nothing anywhere else.
+> The interface is in French. Everything stays on your Mac: the app reads your local `~/.claude` folder and
+> sends nothing anywhere. *(Screenshots use made-up demo data — see [Screenshots](#screenshots).)*
+
+---
 
 ## Contents
 
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Getting started](#getting-started)
-- [User guide](#user-guide)
-- [Settings](#settings)
-- [Privacy](#privacy)
-- [FAQ](#faq)
-- [Building from source](#building-from-source)
-- [Project structure](#project-structure)
-- [License](#license)
+[Highlights](#highlights) · [Requirements](#requirements) · [Install](#install) · [First steps](#first-steps) ·
+[Tour](#tour) · [Settings](#settings) · [Privacy & cost](#privacy--cost) · [FAQ](#faq) ·
+[Build from source](#build-from-source) · [Screenshots](#screenshots) · [License](#license)
 
-## Features
+## Highlights
 
 | | |
 |---|---|
-| **Plan quotas** | 5-hour session, weekly and per-model limits, read from `/usage` every minute and from Claude Code's status line on every reply. |
-| **Forecasts** | Hour-by-hour projection of when each quota runs out, based on your usual working hours over the last four weeks and this week's intensity. |
-| **Live sessions** | Open sessions sorted by state (working, waiting for you, idle), what the agent is doing right now, context usage and one-click compaction. |
-| **Terminal mirror** | The exact screen of a session's iTerm tab, live. Click it to take the keyboard: arrows, Return, Esc, Tab and text go straight to the session, choice menus included. |
-| **Notification center** | Session finished, waiting for your answer, context nearly full, quota at risk, evening summary — inside the app only. |
-| **Agent messaging** | Message any session — open, or closed and relaunched in the background with its history — from another session or from the quick command. |
-| **Quick command** | Start a new project in an iTerm tab, message a session, or hand a task to an ephemeral agent — typed or dictated. |
-| **Floating windows** | Quotas, notifications, sessions and the quick command detach into small always-on-top windows, even over full-screen apps. |
-| **Statistics** | API-equivalent costs, tokens, models, projects and an activity calendar. |
+| 📊 **Quotas & forecast** | Session, weekly and per-model limits, refreshed on every Claude Code reply, with the moment each one will run out at your current pace. |
+| 🟢 **Live sessions** | Every open session — interactive or background — with what it is doing *right now*, its context and one-click actions. |
+| 🖥 **The real terminal** | Background sessions get a real terminal in the app (`claude attach`); interactive ones an exact, coloured mirror of their iTerm tab. Click to type, scroll with the trackpad. |
+| 🔁 **Compact & relaunch** | *Compacter* keeps a synthesis note across `/compact`; *Relancer à neuf* hands a session over to a fresh one without losing anything. |
+| 🔔 **Quiet notifications** | Finished, waiting for you, context nearly full, quota at risk — counted in the menu bar, listed in the app, never a macOS banner, never a window popping up. |
+| ⚡ **Quick command** | Type or dictate: start a project in a new iTerm tab, message a session, or hand a task to an ephemeral agent. |
+| 🪟 **Floating windows** | Quotas, notifications, any session or the quick command float above everything, even full-screen apps. |
+| 🪶 **Nearly free** | ~0 % CPU and ~45 MB of memory while the panel is closed; the panel opens in about 20 ms. |
 
 ## Requirements
 
-- An Apple Silicon Mac (M1 or later) running **macOS 14 Sonoma or later**.
-- **Claude Code** installed, with `claude` on your `PATH`.
-- **[iTerm2](https://iterm2.com)** *(recommended)* for the mirror of interactive sessions, new projects and resuming
-  sessions. Background sessions get a real terminal inside the app (`claude attach`), with or without iTerm2.
-  For the mirror to show iTerm's colours (and to type into a tab even while the hotkey window is hidden), turn on
-  **iTerm2 › Settings › General › Magic › Enable Python API** — no Python needed; without it the mirror is plain text.
-- No administrator rights are needed.
+- An Apple Silicon Mac running **macOS 14 Sonoma or later**. No administrator rights needed.
+- **[Claude Code](https://claude.com/claude-code)** installed, with `claude` on your `PATH`.
+- **[iTerm2](https://iterm2.com)** *(recommended)* — for the mirror of interactive sessions, new projects and
+  relaunches. Turn on **iTerm2 › Settings › General › Magic › Enable Python API** for colours in the mirror and
+  for typing into a tab even while the hotkey window is hidden (no Python needed). Everything else works without
+  iTerm2.
 
-## Installation
+## Install
 
-1. Get the app: [build it from source](#building-from-source), or open the `.dmg` you were given.
-2. Drag **My Claude Code** into your **personal** Applications folder
-   (Finder › Go › Home › Applications — create it if it does not exist).
-   The system-wide `/Applications` folder requires administrator rights; this one does not.
-3. Prebuilt copies are not notarized by Apple: on first launch, **right-click the app › Open**, or allow it
-   in System Settings › Privacy & Security.
+1. [Build it](#build-from-source) (one command), or open the `.dmg` you were given.
+2. Put **My Claude Code** in your **personal** Applications folder (Finder › Go › Home › Applications).
+3. A copy that is not notarized opens with **right-click › Open** the first time.
 
-The icon appears in the menu bar; click it to open the panel.
+The icon appears in the menu bar. Click it; that is the only way the panel ever opens.
 
-## Getting started
+## First steps
 
-1. **Connect the status line** — *Réglages › Connecter à Claude Code*. The app installs a small status line
-   script in `~/.claude/settings.json` (backing it up first) so percentages update on every Claude Code reply.
-   If you already use your own status line, the app asks before replacing it. Without it, quotas still
-   refresh every minute.
-2. **Permissions** — macOS asks once, on first use: microphone and speech recognition (dictation), and
-   control of iTerm (terminal mirror, new projects, compaction).
+1. **Connect the status line** — *Réglages › Connecter à Claude Code*. A small script is added to
+   `~/.claude/settings.json` (backed up first) so figures update on every reply. Your own status line is never
+   replaced without asking.
+2. **Allow** the microphone (dictation) and the control of iTerm when macOS asks.
 3. **Launch at login** — *Réglages › Général*.
 
-## User guide
+## Tour
 
 ### Menu bar
 
-The icon shows your **session** and **weekly** usage, or **today's cost** if you prefer
-(*Réglages › Barre des menus*). Figures turn red past your alert threshold, and a small dot means a
-notification is waiting.
+<img src="docs/screenshots/menubar.png" width="520" alt="Menu bar label, light and dark, with 0, 1, 12 and 99+ notifications">
 
-Click to open the panel; click outside or press <kbd>Esc</kbd> to close it. Reopened within two minutes,
-it comes back where you left it. Over a full-screen app it opens as a menu, so the menu bar stays visible.
+Session and weekly usage at a glance (or today's cost), in red past your alert threshold. Waiting notifications
+show as a **count** in a small clay badge — the panel itself never opens on its own.
 
-### Header
+### Direct — what matters, live
 
-- **Bell** — opens the [notification center](#notification-center); a red badge counts what is waiting.
-- **⚡ Rapide** — opens the [quick command](#quick-command).
-- **Summary line** — plan, model and effort level, open sessions (details on hover).
+<img align="right" src="docs/screenshots/overview.png" width="300" alt="Direct tab">
 
-### Direct tab — what matters, live
+- **Quotas** — the session ring, weekly and per-model limits, their reset time and a forecast: *épuisé jeu.
+  11:39* in orange when a quota will run out before it resets, otherwise *≈ 41 % à la réinit.*
+- **Open sessions** — interactive and background (*fond*), most active first: what the agent is doing, for how
+  long, its context, and two discreet actions on every card — **compact** and **relaunch fresh**.
+- Click a card to open the session; the ⧉ icon detaches it into a floating window.
 
-- **Quotas** — the session ring, weekly and per-model quotas with their reset time and a forecast:
-  *“épuisé lun. 11:37”* in orange when a quota will run out before its reset at your current pace,
-  otherwise *“≈ 44 % à la réinit.”*. Recomputed every five seconds.
-- **Open sessions** — one card per session, most active first: state dot (green working, orange waiting
-  for you, sage idle), what the agent is doing (*“modifie report.ts · depuis 12 s”*) with a precise detail
-  (*“+12 −3 lignes”*), and its context. A **Compacter** button appears from 50 % context. Click a card to
-  open the session.
+<br clear="right">
 
-### Sessions tab
+### Sessions
 
-- Pick a period: today, 7 days, 30 days or all.
-- Sessions are grouped by state — **Actives**, **Attendent votre réponse**, **Au repos** — then
-  **Inactives** by day.
-- **Swipe a card left** to *stop* an open session or *delete* it (its transcript goes to the Trash and
-  can be restored). Right-click offers the same actions.
-- **Tout supprimer**, next to the *Inactives* badge, deletes every inactive session of the period after
-  confirmation.
+<img align="right" src="docs/screenshots/sessions.png" width="300" alt="Sessions tab">
 
-### Session view
+- Today, 7 days, 30 days or everything; open sessions by state, then the others by day.
+- Each session shows its **real name** (the title Claude Code gave it) and its messaging name (`@shop-api-25`).
+- **Swipe left** to stop or delete a session (its transcript goes to the Trash, recoverable), or right-click.
+- **Tout supprimer** clears every inactive session of the period, after confirmation.
 
-A fixed header keeps the session's name, folder, state, branch and messaging name (click to copy) in view.
-Below it:
+<br clear="right">
 
-- **Terminal** — the live screen of the session's iTerm tab (*direct*), coloured like a real terminal.
-  **Click it to take the keyboard** (clay border, *clavier* in its bar): every key goes to the session as if
-  you typed in iTerm — text, Return, Esc, Tab, ⌃C, and the arrow keys to move through Claude Code's choice
-  menus. Sessions without an iTerm tab (closed, or running in the background) are rebuilt from their
-  transcript (*journal*).
-- **Messages entre agents** — what the session exchanged with your other Claude Code sessions and with the
-  app (not its terminal, not your prompts). Pick any session in **À** — open, or closed in the last seven
-  days — to write to it: a closed session is relaunched in the background with its history.
-- *Terminal* and *Messages entre agents* are foldable cards that work as an accordion: opening one folds
-  the other.
-- **Contexte** — context size and **Compacter**: the session writes a synthesis note (goal, progress,
-  decisions, key files, next steps) to `~/.claude/session-notes/`, then `/compact` runs and keeps it.
-  Requires iTerm.
-- **Coût**, **Tokens**, **Détails** *(folded)* — click a card title to fold or unfold it; the app remembers.
-- **Actions** — resume a closed session in a new iTerm tab, copy its resume command, reveal its transcript
-  in Finder, delete it.
+### A session
 
-### Notification center
+<img align="right" src="docs/screenshots/session.png" width="300" alt="Session view with its terminal">
 
-Opened from the bell, grouped by day:
+- **Terminal** — the session itself:
+  - *background session*: a real terminal running `claude attach`, exactly Claude Code's interface;
+  - *interactive session*: the exact screen of its iTerm tab, character for character, in your iTerm font and
+    colours;
+  - *closed session*: its history, rebuilt from the transcript (*journal*).
 
-- a session **finished** its work;
-- a session is **waiting for your answer**;
-- a session's **context is nearly full** (85 %) — with a *Compacter* action;
-- a quota **crossed your threshold**, or **will run out before it resets**;
-- the **daily summary**, every evening at the time you choose.
+  **Click it to type** — text, Return, Esc, Tab, ⌃C, arrows. It only takes the keyboard after a click, so Esc
+  still closes the panel otherwise. Scroll with the wheel or the trackpad.
+- **Contexte** with **Compacter** and **Relancer à neuf** (see below), **Coût**, **Tokens**, **Détails**.
+- **Messages entre agents** — what the session exchanged with your other sessions and the app.
+- **Actions** — resume in iTerm, copy the resume command, reveal the transcript, delete.
 
-Click a notification to open its session; it is cleared. Swipe left or use the ✕ on hover to clear one,
-the ✓ icon to clear all. Opening a session also clears its *finished* and *waiting* notifications.
-Nothing is ever posted to macOS Notification Center.
+<br clear="right">
+
+#### Compacter & Relancer à neuf
+
+- **Compacter** — the session writes a synthesis note (goal, progress, decisions, key files, next step) to
+  `~/.claude/session-notes/`, then `/compact` runs and keeps it. Works for interactive and background sessions.
+- **Relancer à neuf** — for a session that grew too long: it writes the same note, a **new session** starts in a
+  new tab of your iTerm hotkey window, same folder and same model, with a prompt to read the note and carry on.
+  Only once the new session is seen running is the old one stopped, its tab closed and its transcript moved to the
+  Trash; then the app switches to the new one. Any failure stops before anything is closed. Asks for a
+  confirmation first.
+
+### Notifications
+
+<img align="right" src="docs/screenshots/notifications.png" width="300" alt="Notification center">
+
+From the bell, grouped by day: a session **finished**, is **waiting for your answer**, its **context is nearly
+full** (with *Compacter*), a quota **crossed your threshold** or **will run out early**, and an optional **daily
+summary**. Click one to open its session. Nothing is ever posted to macOS Notification Center and the panel
+never opens by itself: the menu bar count tells you.
+
+<br clear="right">
 
 ### Quick command
 
-Type or **dictate** (microphone button) an instruction, pick a destination in **Vers**, press
-<kbd>Return</kbd>:
+<img align="right" src="docs/screenshots/quick.png" width="300" alt="Quick command">
+
+Type or **dictate** an instruction, choose where it goes, press Return:
 
 | Destination | What happens |
 |---|---|
-| **Agent éphémère** | An ephemeral Claude Code agent runs the task in the background with your settings, reports back in the history, then exits. |
-| **Message to a session** (or all) | The message is delivered through Claude Code's inter-session messaging; the reply shows in the session's *Messages entre agents*. Closed sessions are listed too: they are relaunched in the background with their history. |
-| **Nouveau chantier** | A new tab opens in your iTerm hotkey window and Claude Code starts in the chosen folder with your instruction as its first message. |
+| **Agent éphémère** | A one-off Claude Code agent does the task in the background and reports back here. |
+| **A session** (or all) | Typed straight into it — instant, no relay. Closed sessions are relaunched in the background with their history. |
+| **Nouveau chantier** | A new tab in your iTerm hotkey window, Claude Code started in the chosen folder with your instruction. |
 
-The destination always resets to the ephemeral agent, so a new project never starts by accident. The
-history keeps every command and its report; swipe left to delete one.
+<br clear="right">
 
 ### Floating windows
 
-Quotas, the notification center, any session and the quick command can be **detached** into small windows
-that stay visible on every Space, including over full-screen apps — handy during a video call.
+<img src="docs/screenshots/floating-session.png" width="380" alt="A session in a floating window">&nbsp;&nbsp;
+<img src="docs/screenshots/floating-quotas.png" width="300" alt="Quotas in a floating window">
 
-- Click the **⧉** icon at the top right of an element to detach it; it turns clay while detached, and
-  clicking it again closes the floating window.
-- Move a window by its top bar, resize it from its edges, close it with ✕.
-- Open windows are restored, in place, the next time the app starts.
+Quotas, notifications, any session and the quick command detach (⧉) into small windows that stay above
+everything on every Space — handy during a video call. Drag them from anywhere, resize them from their edges;
+they come back in place at the next launch.
 
-A detached session shows its summary (model, replies, cost, duration), context with *Compacter*, its live
-terminal (click to type) and its agent-to-agent messages, as an accordion.
+### Stats & Statut
 
-### Stats and Statut tabs
-
-- **Stats** — API-equivalent costs, tokens, replies, models, projects, activity calendar, hourly and
-  weekday breakdowns.
-- **Statut** — Claude Code status and version, configuration and MCP servers.
+- **Stats** — API-equivalent costs, tokens, replies, models, projects, activity calendar, hours and weekdays.
+  Cards can be reordered and hidden.
+- **Statut** — Claude Code version and status, configuration and MCP servers.
 
 ## Settings
 
+<img align="right" src="docs/screenshots/settings.png" width="300" alt="Settings">
+
 | Section | Options |
 |---|---|
-| **Général** | Launch at login; menu bar content (session + week, or today's cost). |
-| **Alertes** | One switch per notification type; time of the daily summary (17:30 to 20:30). |
-| **Limites et alertes** | Status line connection, quota alert threshold, open the panel when a threshold is crossed, `/usage` refresh interval (1, 2 or 5 minutes). |
+| **Général** | Launch at login; menu bar content. |
+| **Alertes** | One switch per notification type; daily summary time. |
+| **Limites et alertes** | Status line, alert threshold, `/usage` refresh (1, 2 or 5 min). |
+| **Nettoyage** | Move sessions older than 30, 90 or 180 days to the Trash. |
 
-## Privacy
+<br clear="right">
 
-- The app reads `~/.claude` (transcripts, sessions, settings) and runs the local `claude` CLI.
-- Its own settings and history live in `~/Library/Application Support/MyClaudeCode` and its preferences.
-- No telemetry, no network calls of its own. Reading `/usage` and transcripts does not consume your quota;
-  messaging a session or running an ephemeral agent goes through Claude Code like any other exchange.
+## Privacy & cost
+
+- The app reads `~/.claude` (transcripts, sessions, jobs, settings) and runs your local `claude` CLI; its own
+  data lives in `~/Library/Application Support/My Claude Code`. No telemetry, no network calls of its own.
+- Reading quotas (`/usage`), transcripts and terminals costs **no tokens**. Compacting, relaunching, ephemeral
+  agents and messages go through Claude Code like anything you type.
+- While the panel is closed the app stays nearly idle: no file is re-read and no process is started unless
+  something changed.
 
 ## FAQ
 
-**Percentages don't move.** Connect the status line (*Réglages*); otherwise they refresh on every `/usage`
-read (every minute by default).
+**The mirror has no colours / says “journal”.** Enable iTerm's Python API (see [Requirements](#requirements)) and
+allow the app to control iTerm (System Settings › Privacy & Security › Automation). *Journal* means the session
+has no terminal any more (closed).
 
-**The terminal says *journal* instead of *direct*.** The session has no iTerm tab (closed, background, or
-started in another terminal), or the app is not yet allowed to control iTerm
-(System Settings › Privacy & Security › Automation).
+**How do I scroll a background session's terminal?** Like in iTerm: the wheel and the trackpad are passed to
+Claude Code, which scrolls its own conversation.
 
-**“Fenêtre à raccourci d'iTerm introuvable”.** New projects and resumed sessions open in iTerm's hotkey
-window: set one up in iTerm › Settings › Keys › Hotkey, then open it once.
+**“Fenêtre à raccourci d'iTerm introuvable”.** New projects and relaunches open in iTerm's hotkey window: set one
+up in iTerm › Settings › Keys › Hotkey and open it once.
 
-**Does the app work without iTerm?** Yes: quotas, forecasts, sessions, notifications, statistics and
-inter-session messages all work; terminals are rebuilt from transcripts.
+**My microphone stopped working with the lid closed.** macOS turns the built-in microphone off in clamshell mode;
+pick another input in System Settings › Sound.
 
-## Building from source
+## Build from source
 
-Requires Apple's developer tools (Xcode, or `xcode-select --install`), Swift 5.10 or later. No other dependency: the
-terminal emulator ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), MIT) is vendored in `Vendor/` and built by the
-script (once, then only when its sources change).
+Apple's developer tools (Xcode or `xcode-select --install`) with Swift 5.10 or later — nothing else. The terminal
+emulator ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) 1.8, MIT) is vendored and built by the script.
 
 ```sh
 git clone https://github.com/fredericvilcot/my-claude-code.git
 cd my-claude-code
-./build.sh            # builds "build/My Claude Code.app"
+./build.sh            # → build/My Claude Code.app
 ./build.sh --install  # builds, copies it to ~/Applications and launches it
 ```
 
-**Code signing.** If a code signing identity named *Local Menu Apps Signing* exists in your keychain, the
-script uses it, so macOS keeps granted permissions across rebuilds. Otherwise the app is signed ad hoc,
-which works too (macOS will ask for permissions again after each rebuild).
-
-## Project structure
+If a code signing identity named *Local Menu Apps Signing* exists in your keychain, the script uses it so macOS
+keeps its permissions across rebuilds; otherwise the app is signed ad hoc.
 
 ```
-Sources/App/     AppKit entry point, menu bar panel, floating windows
-Sources/Data/    transcripts, /usage, forecasts, sessions, notifications, iTerm mirror
-Sources/Views/   SwiftUI views: tabs, cards, terminal, notification center, quick command
-Resources/       Info.plist, app icon
-Vendor/SwiftTerm vendored terminal emulator (MIT), used for background sessions (`claude attach`)
-build.sh         build, sign, install
+Sources/App/      entry point, menu bar panel, floating windows
+Sources/Data/     transcripts, quotas & forecasts, sessions, iTerm (AppleScript + API), notifications
+Sources/Views/    SwiftUI views
+Vendor/SwiftTerm  terminal emulator (MIT)
+docs/             screenshots and the demo data that produces them
 ```
+
+## Screenshots
+
+Every picture above comes from **made-up data**, never from a real account:
+
+```sh
+./docs/screenshots.sh
+```
+
+It builds a fake home (`docs/demo/make-demo.py`: projects, five weeks of history, open sessions, a background
+job, quotas), runs a copy of the app on it in demo mode (`MCC_DEMO`, `CFFIXED_USER_HOME`, its own preferences —
+it never calls `claude`), captures every screen into `docs/screenshots/`, then deletes it all.
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE.md) © 2026 Frédéric Vilcot.
-
-You may use, study, modify and share this software for any **noncommercial** purpose (personal use,
-research, education, hobby projects, charitable and public organizations). Any commercial use requires a
-separate license from the author.
+[PolyForm Noncommercial 1.0.0](LICENSE.md) © 2026 Frédéric Vilcot — free for any **noncommercial** use
+(personal, research, education, hobby, charitable and public organizations). Commercial use requires a separate
+license from the author.
