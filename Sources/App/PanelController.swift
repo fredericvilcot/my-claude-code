@@ -389,8 +389,16 @@ final class PanelController: NSObject, NSMenuDelegate {
     /// Where the panel sits when attached: under the menu bar icon, full height.
     private func attachedFrame() -> NSRect? {
         guard let button = item?.button, let window = button.window else { return nil }
-        let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
-        let screen = NSScreen.screens.first { $0.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY)) } ?? window.screen ?? NSScreen.main
+        var anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+        var screen = NSScreen.screens.first { $0.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY)) } ?? window.screen ?? NSScreen.main
+        // With several displays each has its menu bar, and the icon's window can still report another display at
+        // click time: the display whose menu bar was actually clicked wins (height and position follow it).
+        let mouse = NSEvent.mouseLocation
+        if let clicked = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }), clicked != screen,
+           mouse.y >= clicked.visibleFrame.maxY - 2 {
+            screen = clicked
+            anchor = NSRect(x: mouse.x - anchor.width / 2, y: clicked.visibleFrame.maxY, width: anchor.width, height: 0)
+        }
         guard let frame = screen?.frame, let visible = screen?.visibleFrame else { return nil }
         let width: CGFloat = 400
         let top = min(anchor.minY, visible.maxY) - 6
