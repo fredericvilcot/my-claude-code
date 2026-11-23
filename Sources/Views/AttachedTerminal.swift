@@ -73,8 +73,13 @@ final class AttachTerminalView: LocalProcessTerminalView {
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         guard let window else { return }
         // ⌃Z would suspend `claude attach` (there is no shell to return to here): swallow it.
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
-            guard let self, event.window === self.window else { return event }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .scrollWheel]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .scrollWheel {
+                guard let point = self.localPoint(event) else { return event }
+                return self.bounds.contains(point) && self.forwardWheel(event, at: point) ? nil : event
+            }
+            guard event.window === self.window else { return event }
             if event.type == .leftMouseDown {
                 // The terminal gets the keyboard only from a click inside it.
                 self.clicked = self.bounds.contains(self.convert(event.locationInWindow, from: nil))
@@ -98,6 +103,40 @@ final class AttachTerminalView: LocalProcessTerminalView {
                 self.onFocus(self.clicked && self.window?.isKeyWindow == true && self.window?.firstResponder === self)
             })
         }
+    }
+
+    // MARK: Scrolling
+    //
+    // Claude Code draws on the alternate screen and asks for mouse reports to scroll its conversation itself.
+    // SwiftTerm 1.8 only scrolls its own (empty) scrollback there, so the wheel never reached Claude Code: it is
+    // forwarded here as wheel buttons, the trackpad's fine deltas grouped into steady line steps (like iTerm).
+
+    private var wheelAccumulator: CGFloat = 0
+
+    /// True when the event was sent to the program (it wants the mouse); false to let SwiftTerm scroll its scrollback.
+    /// Where the event is, in this view (events without a window carry screen coordinates).
+    private func localPoint(_ event: NSEvent) -> NSPoint? {
+        guard let window else { return nil }
+        if event.window === window { return convert(event.locationInWindow, from: nil) }
+        guard event.window == nil else { return nil }
+        return convert(window.convertPoint(fromScreen: event.locationInWindow), from: nil)
+    }
+
+    private func forwardWheel(_ event: NSEvent, at point: NSPoint) -> Bool {
+        let terminal = getTerminal()
+        guard terminal.mouseMode != .off else { return false }
+        if event.phase == .began || event.phase == .mayBegin { wheelAccumulator = 0 }
+        let lineHeight = max(8, bounds.height / CGFloat(max(terminal.rows, 1)))
+        wheelAccumulator += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * lineHeight
+        var steps = Int(wheelAccumulator / lineHeight)
+        guard steps != 0 else { return true }
+        wheelAccumulator -= CGFloat(steps) * lineHeight
+        steps = max(-6, min(6, steps))   // a flick never floods the session
+        let col = max(0, min(terminal.cols - 1, Int(point.x / (bounds.width / CGFloat(max(terminal.cols, 1))))))
+        let row = max(0, min(terminal.rows - 1, Int((bounds.height - point.y) / lineHeight)))
+        let flags = terminal.encodeButton(button: steps > 0 ? 4 : 5, release: false, shift: false, meta: false, control: false)
+        for _ in 0..<abs(steps) { terminal.sendEvent(buttonFlags: flags, x: col, y: row) }
+        return true
     }
 
     /// Leaves the session running: only this client goes away.

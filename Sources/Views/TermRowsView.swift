@@ -7,7 +7,8 @@ struct TermRowsView: View {
     let rows: [TerminalMirror.Row]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        // Lazy: a long session's history (hundreds of rows) only builds the rows on screen.
+        LazyVStack(alignment: .leading, spacing: 3) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 switch row {
                 case .rule:

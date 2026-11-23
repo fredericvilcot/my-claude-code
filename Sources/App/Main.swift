@@ -170,6 +170,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 exit(0)
             }
         }
+        if CommandLine.arguments.contains("--test-scroll") {
+            // With --snapshot --session-detail on a background session: scrolls its embedded terminal up with real
+            // wheel events (through NSApp, like a trackpad) just before the capture.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                func find(_ v: NSView) -> AttachTerminalView? { (v as? AttachTerminalView) ?? v.subviews.lazy.compactMap(find).first }
+                guard let window = NSApp.windows.first(where: { $0 is FloatingPanel && $0.isVisible }), let content = window.contentView,
+                      let term = find(content) else { print("terminal introuvable"); return }
+                func screen() -> [String] {
+                    let t = term.getTerminal()
+                    return (0..<t.rows).compactMap { t.getLine(row: $0)?.translateToString(trimRight: true) }
+                }
+                let before = screen()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    let after = screen()
+                    let changed = zip(before, after).filter { $0 != $1 }.count
+                    print("lignes modifiées : \(changed)/\(before.count)")
+                    let first: String = before.first(where: { $0.count > 20 }) ?? ""
+                    let last: String = after.first(where: { $0.count > 20 }) ?? ""
+                    print("avant : \(first.prefix(70))")
+                    print("après : \(last.prefix(70))")
+                }
+                let center = term.convert(NSPoint(x: term.bounds.midX, y: term.bounds.midY), to: nil)
+                let screen = window.convertPoint(toScreen: center)
+                let flipped = CGPoint(x: screen.x, y: (NSScreen.screens.first?.frame.height ?? 0) - screen.y)
+                let wheelLines: Int32 = Int32(ProcessInfo.processInfo.environment["MCC_WHEEL"] ?? "") ?? 3
+                for _ in 0..<8 {
+                    guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: wheelLines, wheel2: 0, wheel3: 0) else { continue }
+                    cg.location = flipped
+                    cg.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window.windowNumber))
+                    cg.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window.windowNumber))
+                    if let ev = NSEvent(cgEvent: cg) { NSApp.sendEvent(ev) }
+                }
+            }
+        }
         if CommandLine.arguments.contains("--bench-menu") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { PanelController.shared.benchMenu() }
         }
