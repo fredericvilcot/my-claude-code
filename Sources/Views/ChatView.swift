@@ -124,10 +124,10 @@ struct ChatPanel: View {
         }
     }
 
-    /// The agent is working on your last message.
+    /// The session is answering a message the app relayed to it (its reply lands here): only while it works on it.
     private var typing: Bool {
-        guard let last = items.last, last.role != .agent else { return false }
-        return live?.phase == 0 || Date().timeIntervalSince(last.date) < 20
+        guard let last = items.last, last.role != .agent, last.role == .me || last.from == "agent éphémère" else { return false }
+        return live?.phase == 0
     }
 
     /// To this session, or to the session chosen in "À" (open: relayed; closed: relaunched in the background).

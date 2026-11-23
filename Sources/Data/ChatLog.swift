@@ -24,6 +24,9 @@ enum ChatLog {
         var items: [ChatItem] = []
         var appSenders = Set<String>()   // relay addresses, to recognize replies sent back to the app
         var subagents = Set<String>()    // this session's own subagents: their traffic is not inter-session chat
+        /// After a message received through the app's relay (closed right after sending), the session answers in its
+        /// own turn: its first text after the message is its reply, shown in the chat.
+        var awaitingReply = false
     }
     private static var cache: [String: State] = [:]
     private static let lock = NSLock()
@@ -82,6 +85,8 @@ enum ChatLog {
                     let quick = body.contains(PromptSender.quickMarker)
                     state.items.append(ChatItem(id: uuid, role: isApp(name) && !quick ? .me : .peer, text: PromptSender.stripFooter(body),
                                                 date: date, from: quick ? "agent éphémère" : name))
+                    // Relayed by the app (quick command or chat): the answer comes in this session's own turn.
+                    state.awaitingReply = body.contains(PromptSender.quickMarker) || body.contains(PromptSender.chatMarker)
                 } else if let origin = obj["origin"] as? [String: Any], let task = origin["senderTaskId"] as? String {
                     state.subagents.insert(task)
                 }
@@ -89,6 +94,14 @@ enum ChatLog {
             }
             // Messages this session sent with SendMessage (its terminal text is never shown).
             guard let blocks = content as? [[String: Any]] else { continue }
+            // Its reply to a relayed message: the latest text of the turn.
+            if state.awaitingReply,
+               let text = blocks.last(where: { $0["type"] as? String == "text" })?["text"] as? String,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                state.items.append(ChatItem(id: "\(uuid)-reply", role: .agent, text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                                            date: date, to: "My Claude Code"))
+                state.awaitingReply = false
+            }
             for (i, b) in blocks.enumerated() where b["type"] as? String == "tool_use" && b["name"] as? String == "SendMessage" {
                 let input = b["input"] as? [String: Any] ?? [:]
                 guard let message = input["message"] as? String, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }

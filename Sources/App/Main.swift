@@ -204,6 +204,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        if let i = CommandLine.arguments.firstIndex(of: "--dump-chat"), i + 1 < CommandLine.arguments.count {
+            // Prints what "Messages entre agents" shows for the session whose id starts with the argument.
+            let prefix = CommandLine.arguments[i + 1]
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                let files = UsageLog.listFiles().map(\.path).filter { ($0 as NSString).lastPathComponent.hasPrefix(prefix) }
+                guard let path = files.first else { print("journal introuvable"); exit(1) }
+                let id = String((path as NSString).lastPathComponent.dropLast(6))
+                for item in ChatLog.items(for: id, appPrompts: []) {
+                    let who = item.role == .agent ? "→ réponse" : "← \(item.from)"
+                    print("\(who) : \(item.text.replacingOccurrences(of: "\n", with: " ").prefix(110))")
+                }
+                exit(0)
+            }
+        }
         if CommandLine.arguments.contains("--bench-menu") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 10) { PanelController.shared.benchMenu() }
         }
