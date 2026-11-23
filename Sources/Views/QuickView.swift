@@ -14,7 +14,7 @@ struct QuickView: View {
     @State private var launchError: String?
     @State private var launching = false
     @State private var pickerOpen = false
-    @FocusState private var fieldFocused: Bool
+    @State private var fieldFocused = false
     @AppStorage("quickDraft") private var text = ""
     /// "eph", "all", "sess:<id>" or "proj:<path>".
     @AppStorage("quickTarget") private var target = "eph"
@@ -105,17 +105,12 @@ struct QuickView: View {
                             .background(Circle().fill((dictation.isRecording ? Color.red : Theme.clay).opacity(0.13)))
                     }
                     .buttonStyle(.plain)
-                    TextField("", text: $text, prompt: Text(dictation.isRecording ? "Je vous écoute…" : "Votre consigne…")
-                        .foregroundStyle(Theme.inkFaint), axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(Theme.sans(13.5)).foregroundStyle(Theme.ink)
-                        .lineLimit(2...8)
-                        .focused($fieldFocused)
+                    ClayTextField(text: $text, placeholder: dictation.isRecording ? "Je vous écoute…" : "Votre consigne…",
+                                  minLines: 2, maxLines: 8, focused: $fieldFocused, onSubmit: send)
                         .padding(.horizontal, 12).padding(.vertical, 9)
                         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.paper))
                         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(dictation.isRecording ? Color.red.opacity(0.6) : Theme.rule, lineWidth: dictation.isRecording ? 1.5 : 0.5))
-                        .onSubmit(send)
                 }
                 if let error = dictation.error { Text(error).font(Theme.sans(11.5)).foregroundStyle(.orange) }
 
@@ -229,13 +224,17 @@ struct QuickView: View {
             SessionLauncher.startProject(in: dir, prompt: p) { error in
                 launching = false
                 center.finishProject(job, in: dir, error: error)
-                if let error { launchError = error } else { text = ""; close() }
+                if let error { launchError = error } else { text = ""; target = "eph"; close() }
             }
-        case .session(let s): center.quick(p, to: [s]); text = ""
-        case .closed(let s): center.send(p, from: s, to: nil); text = ""
-        case .all: center.quick(p, to: sessions); text = ""
-        case .ephemeral: center.quick(p, to: []); text = ""
+            return
+        case .session(let s): center.quick(p, to: [s])
+        case .closed(let s): center.send(p, from: s, to: nil)
+        case .all: center.quick(p, to: sessions)
+        case .ephemeral: center.quick(p, to: [])
         }
+        // Sent: the field empties and the destination goes back to the ephemeral agent.
+        text = ""
+        target = "eph"
     }
 
     /// Any folder, through the standard picker (the panel steps aside while it is open).

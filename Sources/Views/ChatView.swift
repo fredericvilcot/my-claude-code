@@ -89,16 +89,12 @@ struct ChatPanel: View {
                         .background(Circle().fill((dictation.isRecording ? Color.red : Theme.clay).opacity(0.13)))
                 }
                 .buttonStyle(.plain)
-                TextField("", text: text, prompt: Text(dictation.isRecording ? "Je vous écoute…" : recipientName.map { "Écrire à \($0)…" } ?? "Écrire à l'agent…")
-                            .foregroundStyle(Theme.inkFaint), axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(Theme.sans(13.5)).foregroundStyle(Theme.ink)
-                    .lineLimit(1...6)
+                ClayTextField(text: text, placeholder: dictation.isRecording ? "Je vous écoute…" : recipientName.map { "Écrire à \($0)…" } ?? "Écrire à l'agent…",
+                              minLines: 1, maxLines: 6, onSubmit: { send(text.wrappedValue) })
                     .padding(.horizontal, 12).padding(.vertical, 9)
                     .background(RoundedRectangle(cornerRadius: 17, style: .continuous).fill(Theme.paper))
                     .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous)
                         .strokeBorder(dictation.isRecording ? Color.red.opacity(0.6) : Theme.rule, lineWidth: dictation.isRecording ? 1.5 : 0.5))
-                    .onSubmit { send(text.wrappedValue) }
                 Button { send(text.wrappedValue) } label: {
                     Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
                         .frame(width: 34, height: 34)

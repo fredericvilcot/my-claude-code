@@ -513,18 +513,12 @@ struct PromptComposer: View {
             RecipientPicker(selfName: live?.name ?? session.displayName, others: others,
                             recipientID: Binding(get: { center.recipients[session.info.id] }, set: { center.recipients[session.info.id] = $0 }),
                             open: $pickerOpen)
-            // Native multi-line field: placeholder and caret share the same origin.
-            TextField("", text: text, prompt: Text(dictation.isRecording ? "Je vous écoute…" : "Votre instruction pour cette session…")
-                        .foregroundStyle(Theme.inkFaint), axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(Theme.sans(13.5))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(3...8)
+            ClayTextField(text: text, placeholder: dictation.isRecording ? "Je vous écoute…" : "Votre instruction pour cette session…",
+                          minLines: 3, maxLines: 8, onSubmit: { send(text.wrappedValue, live: recipient ?? live) })
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.paper))
                 .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(dictation.isRecording ? Color.red.opacity(0.6) : Theme.rule, lineWidth: dictation.isRecording ? 1.5 : 0.5))
-                .onSubmit { send(text.wrappedValue, live: recipient ?? live) }
             HStack(spacing: 10) {
                 Button { dictation.toggle() } label: {
                     Image(systemName: dictation.isRecording ? "stop.circle.fill" : "mic.fill")

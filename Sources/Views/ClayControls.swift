@@ -104,3 +104,113 @@ struct ClaySlider: View {
         .frame(height: 22)
     }
 }
+
+/// Multi-line text field built on AppKit's NSTextView: a crisp clay caret where the text starts, the placeholder on
+/// the very same origin, Return sends, ⇧Return or ⌥Return adds a line, Escape still closes the panel, and the field
+/// grows from `minLines` to `maxLines` then scrolls. (SwiftUI's vertical TextField draws a misplaced caret in the
+/// app's non-activating panels.)
+struct ClayTextField: View {
+    @Binding var text: String
+    var placeholder: String
+    var minLines = 1
+    var maxLines = 6
+    var focused: Binding<Bool>? = nil
+    var onSubmit: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if text.isEmpty {
+                Text(placeholder).font(.system(size: 13.5)).foregroundStyle(Theme.inkFaint).lineLimit(1).allowsHitTesting(false)
+            }
+            ClayTextEditor(text: $text, minLines: minLines, maxLines: maxLines, focused: focused, onSubmit: onSubmit)
+        }
+    }
+}
+
+struct ClayTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    var minLines: Int
+    var maxLines: Int
+    var focused: Binding<Bool>?
+    var onSubmit: () -> Void
+
+    static let font = NSFont.systemFont(ofSize: 13.5)
+
+    final class SubmitTextView: NSTextView {
+        var submit: () -> Void = {}
+        override var needsPanelToBecomeKey: Bool { true }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func keyDown(with event: NSEvent) {
+            let isReturn = event.keyCode == 36 || event.keyCode == 76
+            if isReturn, !hasMarkedText(), event.modifierFlags.intersection([.shift, .option]).isEmpty { submit(); return }
+            if isReturn { insertNewlineIgnoringFieldEditor(nil); return }
+            super.keyDown(with: event)
+        }
+        // Escape is the panel's (close), not the text view's (completion).
+        override func cancelOperation(_ sender: Any?) { window?.cancelOperation(sender) }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ClayTextEditor
+        init(_ parent: ClayTextEditor) { self.parent = parent }
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            parent.text = tv.string
+        }
+        func textDidBeginEditing(_ notification: Notification) { parent.focused?.wrappedValue = true }
+        func textDidEndEditing(_ notification: Notification) { parent.focused?.wrappedValue = false }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = false
+        scroll.hasHorizontalScroller = false
+        let tv = SubmitTextView()
+        tv.delegate = context.coordinator
+        tv.isRichText = false
+        tv.allowsUndo = true
+        tv.font = Self.font
+        tv.textColor = NSColor(Theme.ink)
+        tv.insertionPointColor = NSColor(Theme.clay)
+        tv.drawsBackground = false
+        tv.textContainerInset = .zero
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.textContainer?.widthTracksTextView = true
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.autoresizingMask = [.width]
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.string = text
+        tv.submit = onSubmit
+        scroll.documentView = tv
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let tv = scroll.documentView as? SubmitTextView else { return }
+        tv.submit = onSubmit
+        if tv.string != text {   // changed from outside (sent, dictation…): caret at the end
+            tv.string = text
+            tv.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        }
+        if focused?.wrappedValue == true, let window = tv.window, window.firstResponder !== tv {
+            DispatchQueue.main.async { window.makeKey(); window.makeFirstResponder(tv) }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
+        let width = max(40, proposal.width ?? 240)
+        guard let tv = scroll.documentView as? NSTextView, let layout = tv.layoutManager, let container = tv.textContainer else { return nil }
+        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        layout.ensureLayout(for: container)
+        let line = layout.defaultLineHeight(for: Self.font)
+        let used = max(layout.usedRect(for: container).height, line)
+        return CGSize(width: width, height: ceil(min(max(used, line * CGFloat(minLines)), line * CGFloat(maxLines))))
+    }
+}
