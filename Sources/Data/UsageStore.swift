@@ -82,6 +82,35 @@ struct Snapshot {
     var profiles: [String: [Double]] = [:]    // hour-of-week cost profile per model family
 }
 
+/// Whether any window of the app is on screen: the menu bar panel, the full-screen menu or a floating window.
+/// While none is, periodic work drops to almost nothing (statistics once a minute, no transcript parsing, no
+/// timelines, no iTerm polling): the app stays invisible in Activity Monitor when nobody looks at it.
+@Observable
+final class AppActivity {
+    static let shared = AppActivity()
+    /// Observed by views (timelines, polling loops). Main thread.
+    private(set) var visible = false
+    @ObservationIgnored private var panel = false
+    @ObservationIgnored private var menu = false
+    @ObservationIgnored private var floating = false
+    private static let lock = NSLock()
+    private static var flag = false
+    /// The same value, readable from any thread.
+    static var isVisible: Bool { lock.lock(); defer { lock.unlock() }; return flag }
+
+    /// Main thread: called when the panel, the full-screen menu or a floating window opens or closes.
+    func set(panel: Bool? = nil, menu: Bool? = nil, floating: Bool? = nil) {
+        if let panel { self.panel = panel }
+        if let menu { self.menu = menu }
+        if let floating { self.floating = floating }
+        let now = self.panel || self.menu || self.floating
+        guard now != visible else { return }
+        visible = now
+        Self.lock.lock(); Self.flag = now; Self.lock.unlock()
+        if now { UsageStore.shared.wake() }
+    }
+}
+
 @Observable
 final class UsageStore {
     static let shared = UsageStore()
@@ -97,10 +126,12 @@ final class UsageStore {
     var exactContexts: [String: (percent: Double, date: Date)] = [:]
     var mcp: McpInventory?
     var live: [String: LiveSession] = [:]
+    /// Bumped when a background transcript computation (titles, activity) lands.
+    var transcriptTick = 0
     @ObservationIgnored private var background: [String: LiveSession] = [:]
     @ObservationIgnored private var liveTimer: Timer?
 
-    private func mergeLive(_ interactive: [String: LiveSession]) {
+    private func mergeLive(_ interactive: [String: LiveSession], contexts: Bool = false) {
         let merged = interactive.merging(background) { a, _ in a }
         let changed = merged.count != live.count || merged.contains { live[$0.key]?.state != $0.value.state || live[$0.key]?.name != $0.value.name }
         if changed {
@@ -108,7 +139,8 @@ final class UsageStore {
             live = merged
             Task { @MainActor in AttentionCenter.shared.observe(old: old, new: merged) }
         }
-        Task { @MainActor in AttentionCenter.shared.observeContexts(self) }
+        // Context alerts: only when sessions or their exact contexts changed (not on every 2 s tick).
+        if changed || contexts { Task { @MainActor in AttentionCenter.shared.observeContexts(self) } }
     }
     @ObservationIgnored private var mcpTimer: Timer?
 
@@ -122,6 +154,15 @@ final class UsageStore {
     }
 
     /// Context fraction of a session: exact from the status line when recent, else from its transcript.
+    /// The session's real name: the title Claude Code gave it, else a background agent's name, else its folder.
+    /// (Its technical messaging name, e.g. "my-project-42", is `live[id].name`.)
+    func title(of s: SessionStat) -> String {
+        _ = transcriptTick   // observe background title updates
+        if let t = SessionTitles.title(for: s.info.id) { return t }
+        if let l = live[s.info.id], l.kind == "background", !l.name.isEmpty { return l.name }
+        return s.name
+    }
+
     func context(of s: SessionStat) -> (fraction: Double, exact: Bool) {
         if let e = exactContexts[s.info.id], e.date.timeIntervalSince1970 >= s.info.last - 120 { return (e.percent / 100, true) }
         return (s.contextFraction, false)
@@ -131,6 +172,10 @@ final class UsageStore {
     @ObservationIgnored private var pollTimer: Timer?
     @ObservationIgnored private var lastPoll: UsagePoller.Result?
     @ObservationIgnored private var polling = false
+    @ObservationIgnored private var lastPollEnd = Date.distantPast
+    @ObservationIgnored private var statusLoaded = false
+    @ObservationIgnored private var lastScan = Date.distantPast
+    @ObservationIgnored private var liveTicks = 0
 
     @ObservationIgnored private var cache = UsageCache()
     @ObservationIgnored private var seen = Set<String>()
@@ -150,8 +195,14 @@ final class UsageStore {
     }
 
     /// Runs `claude -p /usage` in the background; reschedules itself with the chosen interval.
-    func pollUsage() {
+    /// Runs `claude -p /usage` (a Claude Code process: not free). The periodic poll is skipped while the status line
+    /// is fresh (an open session refreshes the same figures for free); opening the panel always polls.
+    func pollUsage(periodic: Bool = false) {
+        if periodic, !PanelController.shared.isOpen, let line = lastStatusLine, line.session != nil || line.week != nil,
+           Date().timeIntervalSince(line.updatedAt) < 120 { return }
         if polling, Date().timeIntervalSince(pollStarted) < 90 { return }
+        // Opening the panel again right away: figures from less than 30 s ago are fresh (one process less).
+        if !periodic, Date().timeIntervalSince(lastPollEnd) < 30 { return }
         polling = true
         pollStarted = Date()
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -160,6 +211,7 @@ final class UsageStore {
                 guard let self else { return }
                 self.polling = false
                 if let result, !result.windows.isEmpty {
+                    self.lastPollEnd = Date()
                     self.lastPoll = result
                     Self.saveWindows(result)
                     UsageHistory.record(result.windows, at: result.date)
@@ -170,15 +222,29 @@ final class UsageStore {
     }
 
     func refreshStatus() {
+        // The setup summary (settings, MCP servers…) only feeds views: not re-read while nothing is on screen.
+        let full = AppActivity.isVisible || !statusLoaded
+        statusLoaded = true
         DispatchQueue.global(qos: .utility).async {
-            let s = ClaudeStatus.load()
+            let s = full ? ClaudeStatus.load() : nil
             let contexts = ClaudeCodeLink.sessionContexts()
-            let all = LiveSessions.fetch()   // includes background sessions (slower, every 15 s)
+            let all = LiveSessions.fetchJobs()   // background sessions, from Claude Code's job records (no process spawned)
+            let interactive = LiveSessions.fetchInteractive()
             DispatchQueue.main.async {
-                self.claude = s; self.exactContexts = contexts
+                if let s { self.claude = s }
+                self.exactContexts = contexts
                 self.background = all.filter { $0.value.kind == "background" }
-                self.mergeLive(LiveSessions.fetchInteractive())
+                self.mergeLive(interactive, contexts: true)
             }
+        }
+    }
+
+    /// Something came on screen: catch up right after the opening animation (statistics, status, transcript data).
+    func wake() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+            transcriptTick &+= 1   // views showing transcript-derived data (titles…) ask for fresh values
+            queue.async { [self] in scan() }
+            refreshStatus()
         }
     }
 
@@ -209,13 +275,25 @@ final class UsageStore {
     func schedulePolling() {
         pollTimer?.invalidate()
         let interval = max(60, UserDefaults.standard.double(forKey: "usagePollInterval"))
-        pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.pollUsage() }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.pollUsage(periodic: true) }
+        pollTimer?.tolerance = interval * 0.2
         if let t = pollTimer { RunLoop.main.add(t, forMode: .common) }
         pollUsage()
     }
 
+    @ObservationIgnored private var lastStatusLine: PlanUsage?
+    @ObservationIgnored private var planInputs: (line: Date?, poll: Date?, minute: Int)?
+
+    /// Every 5 s, but only recomputed when the status line file or the /usage figures changed (or once a minute,
+    /// for the "dans 3 heures" texts and the forecast).
     func refreshPlan() {
-        plan = PlanUsage.merge(statusLine: PlanUsage.load(), poll: lastPoll)
+        let lineURL = PlanUsage.snapshotURL
+        let lineDate = (try? lineURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        let inputs = (line: lineDate, poll: lastPoll?.date, minute: Int(Date().timeIntervalSince1970 / 60))
+        if let p = planInputs, p.line == inputs.line, p.poll == inputs.poll, p.minute == inputs.minute { return }
+        planInputs = inputs
+        if lastStatusLine?.updatedAt != lineDate || lastStatusLine == nil { lastStatusLine = PlanUsage.load() }
+        plan = PlanUsage.merge(statusLine: lastStatusLine, poll: lastPoll)
         link = ClaudeCodeLink.state
         LimitAlerts.shared.evaluate(plan)
         onUpdate?()
@@ -242,17 +320,22 @@ final class UsageStore {
         NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in self?.refreshAll() }
         refreshPlan()
         planTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refreshPlan() }
+        planTimer?.tolerance = 1
         if let t = planTimer { RunLoop.main.add(t, forMode: .common) }
         schedulePolling()
         refreshStatus()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.refreshStatus() }
+        statusTimer?.tolerance = 3
         if let t = statusTimer { RunLoop.main.add(t, forMode: .common) }
         liveTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            // Nothing on screen: every 6 s is enough for the menu bar dot and the notification center.
+            if let self, !AppActivity.isVisible { self.liveTicks &+= 1; if self.liveTicks % 3 != 0 { return } }
             DispatchQueue.global(qos: .utility).async {
                 let interactive = LiveSessions.fetchInteractive()
                 DispatchQueue.main.async { self?.mergeLive(interactive) }
             }
         }
+        liveTimer?.tolerance = 0.4
         if let t = liveTimer { RunLoop.main.add(t, forMode: .common) }
         refreshMcp()
         mcpTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in self?.refreshMcp() }
@@ -264,7 +347,12 @@ final class UsageStore {
         let interval = max(5, UserDefaults.standard.double(forKey: "refreshInterval"))
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + interval, repeating: interval, leeway: .seconds(1))
-        t.setEventHandler { [weak self] in self?.scan() }
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            // Nothing on screen: the menu bar figures need no more than one pass a minute.
+            if !AppActivity.isVisible, Date().timeIntervalSince(self.lastScan) < 60 { return }
+            self.scan()
+        }
         t.resume()
         timer = t
     }
@@ -278,11 +366,20 @@ final class UsageStore {
         }
     }
 
-    func records(ofSession index: Int) -> [UsageRecord] {
-        queue.sync { cache.records.filter { $0.s == index } }
+    /// Cumulative cost of a session over time, computed on the scan queue (never waits on a scan from the main thread).
+    func costCurve(ofSession index: Int) async -> [(Date, Double)] {
+        await withCheckedContinuation { cont in
+            queue.async { [self] in
+                var sum = 0.0
+                var out: [(Date, Double)] = []
+                for r in cache.records where r.s == index {
+                    sum += Pricing.cost(model: cache.models[r.m], fast: r.f, input: r.i, output: r.o, write5m: r.w5, write1h: r.w1, read: r.r).total
+                    out.append((Date(timeIntervalSince1970: r.t), sum))
+                }
+                cont.resume(returning: out)
+            }
+        }
     }
-
-    func modelName(_ index: Int) -> String { queue.sync { cache.models[index] } }
 
     // MARK: Scanning (background queue)
 
@@ -297,13 +394,16 @@ final class UsageStore {
     }
 
     private func scan() {
+        lastScan = Date()
         let files = UsageLog.listFiles()
         let pending = files.filter { file in
             guard let mark = cache.files[file.path] else { return true }
             return file.size != mark.size
         }
-        // Recompute at least every minute even without new records (day change, "x min ago", active sessions).
-        guard !pending.isEmpty || loading || Date().timeIntervalSince(lastPublish) > 55 else { return }
+        // Recompute at least every minute even without new records (day change, "x min ago", active sessions);
+        // every 5 minutes while nothing is on screen.
+        let stale = Date().timeIntervalSince(lastPublish) > (AppActivity.isVisible ? 55 : 300)
+        guard !pending.isEmpty || loading || stale else { return }
 
         var results = [(path: String, size: UInt64, records: [UsageLog.Parsed], end: UInt64)?](repeating: nil, count: pending.count)
         let lock = NSLock()
@@ -341,14 +441,26 @@ final class UsageStore {
             cache.files[r.path] = FileMark(offset: r.end, size: r.size)
         }
         if added { cache.records.sort { $0.t < $1.t } }
-        if added || loading {
-            cache.seen = Array(seen)
-            if let data = try? JSONEncoder().encode(cache) { try? data.write(to: cacheURL, options: .atomic) }
-        }
-        publish()
+        // The cache file weighs megabytes: written at most every 5 minutes (and when the app quits), not on every
+        // new record. Losing it costs nothing but a re-read: records are de-duplicated by key.
+        if (added || loading), loading || Date().timeIntervalSince(lastSave) > 300 { saveCache() }
+        // Transcripts grow with lines that carry no usage (prompts, tool results): no new record, nothing to recompute.
+        if added || loading || stale { publish() }
     }
 
     // MARK: Aggregation
+
+    @ObservationIgnored private var lastSave = Date.distantPast
+
+    /// Writes the cache now (scan queue).
+    private func saveCache() {
+        lastSave = Date()
+        cache.seen = Array(seen)
+        if let data = try? JSONEncoder().encode(cache) { try? data.write(to: cacheURL, options: .atomic) }
+    }
+
+    /// Called when the app quits.
+    func flushCache() { queue.sync { saveCache() } }
 
     private func publish() {
         lastPublish = Date()

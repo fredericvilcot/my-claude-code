@@ -199,7 +199,7 @@ struct DashboardView: View {
     }
 
     private var busyCount: Int {
-        store.live.values.filter { $0.kind != "background" && $0.phase == 0 && !$0.name.hasPrefix("my-claude-code") }.count
+        store.live.values.filter { $0.phase == 0 && !$0.name.hasPrefix("my-claude-code") }.count
     }
 
     /// Green while a session is open, grey otherwise.
@@ -216,7 +216,7 @@ struct DashboardView: View {
     }
 
     private var activeCount: Int {
-        store.live.values.filter { $0.kind != "background" && !$0.name.hasPrefix("my-claude-code") }.count
+        store.live.values.filter { !$0.name.hasPrefix("my-claude-code") }.count
     }
 
     private var planLine: String {
@@ -278,7 +278,7 @@ struct DashboardView: View {
 
     private var footer: some View {
         HStack {
-            Text("Données locales · /usage actualisé chaque minute").font(Theme.sans(11)).foregroundStyle(Theme.inkFaint)
+            RefreshStamp()
             Spacer()
             Button { PanelController.shared.closePanel(); NSApp.terminate(nil) } label: {
                 Text("quitter").font(Theme.sans(11.5)).foregroundStyle(Theme.inkSoft)
@@ -296,7 +296,7 @@ struct SendBanner: View {
     let dismiss: () -> Void
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+        TimelineView(.whileShown(0.5)) { _ in
             let tint: Color = job.isRunning ? Theme.clay : job.succeeded ? .green : .red
             HStack(spacing: 10) {
                 Group {
@@ -333,4 +333,39 @@ struct WindowDragHandle: NSViewRepresentable {
     }
     func makeNSView(context: Context) -> NSView { DragView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// Exact time of the last refresh, to the second: quotas (/usage or status line) and sessions (transcripts).
+/// A green dot flashes on each update.
+struct RefreshStamp: View {
+    @Environment(UsageStore.self) private var store
+    @State private var flash = false
+
+    var body: some View {
+        let quotas = store.plan?.updatedAt
+        let sessions = store.lastUpdate
+        HStack(spacing: 6) {
+            Circle().fill(Color.green).frame(width: 6, height: 6).opacity(flash ? 1 : 0.35)
+            Group {
+                if let quotas {
+                    Text("Quotas ") + Text(Fmt.stamp(quotas)).fontWeight(.semibold)
+                        + Text("  ·  Sessions ") + Text(Fmt.stampTime(sessions)).fontWeight(.semibold)
+                } else {
+                    Text("Sessions ") + Text(Fmt.stamp(sessions)).fontWeight(.semibold)
+                }
+            }
+            .font(Theme.sans(10.5).monospacedDigit())
+            .foregroundStyle(Theme.inkSoft)
+            .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .tip([quotas.map { "Quotas (/usage ou ligne d'état) : \(Fmt.stamp($0))" },
+              "Sessions (journaux de Claude Code) : \(Fmt.stamp(sessions))"].compactMap { $0 }.joined(separator: "\n"))
+        .onChange(of: quotas) { _, _ in pulse() }
+        .onChange(of: sessions) { _, _ in pulse() }
+    }
+
+    private func pulse() {
+        withAnimation(.easeOut(duration: 0.15)) { flash = true }
+        withAnimation(.easeIn(duration: 0.8).delay(0.4)) { flash = false }
+    }
 }

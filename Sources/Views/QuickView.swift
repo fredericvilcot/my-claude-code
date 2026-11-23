@@ -20,7 +20,7 @@ struct QuickView: View {
     @AppStorage("quickTarget") private var target = "eph"
 
     private var sessions: [LiveSession] {
-        store.live.values.filter { !$0.name.isEmpty && $0.kind != "background" && !$0.name.hasPrefix("my-claude-code") }
+        store.live.values.filter { !$0.name.isEmpty && !$0.name.hasPrefix("my-claude-code") }
             .sorted { $0.name < $1.name }
     }
 
@@ -45,7 +45,7 @@ struct QuickView: View {
         let since = Date().timeIntervalSince1970 - 7 * 86400
         let hidden = SessionFiles.hidden
         return Array(store.snapshot.sessions
-            .filter { store.live[$0.info.id] == nil && $0.info.last > since && !hidden.contains($0.info.id) }
+            .filter { store.live[$0.info.id] == nil && $0.info.last > since && !hidden.contains($0.info.id) && !SessionLineage.isParked($0.info.id) }
             .sorted { $0.info.last > $1.info.last }
             .prefix(8))
     }
@@ -67,7 +67,7 @@ struct QuickView: View {
         case .session(let s):
             ("at", s.name, "Le message est transmis à cette session ; sa réponse arrive dans son chat.", "Envoyer", "arrow.up")
         case .closed(let s):
-            ("arrow.clockwise", s.name, "Session fermée : elle est relancée en arrière-plan avec son historique et reçoit votre message.", "Envoyer", "arrow.up")
+            ("arrow.clockwise", s.displayName, "Session fermée : elle est relancée en arrière-plan avec son historique et reçoit votre message.", "Envoyer", "arrow.up")
         case .project(let p):
             ("folder.fill", (p as NSString).lastPathComponent,
              "Nouvelle session Claude Code dans un onglet de votre fenêtre iTerm, avec cette consigne comme premier message.",
@@ -277,7 +277,7 @@ struct QuickJobRow: View {
                 .frame(width: 16)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(job.prompt).font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink).lineLimit(expanded ? nil : 2)
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    TimelineView(.whileShown(1)) { _ in
                         Text("\(job.recipient) · \(Fmt.time(job.started)) · \(job.isRunning ? "en cours " : "")\(Int(job.duration)) s")
                             .font(Theme.sans(10.5)).foregroundStyle(Theme.inkFaint)
                     }
@@ -332,7 +332,7 @@ struct DestinationPicker: View {
                 if !closed.isEmpty {
                     section("Session fermée", note: "relancée en arrière-plan").padding(.top, 8)
                     ForEach(closed) { s in
-                        row(key: "closed:" + s.info.id, symbol: "arrow.clockwise", tint: Color.gray, title: s.name,
+                        row(key: "closed:" + s.info.id, symbol: "arrow.clockwise", tint: Color.gray, title: s.displayName,
                             subtitle: s.info.branch, trailing: OverviewView.ago(Date(timeIntervalSince1970: s.info.last)))
                     }
                 }

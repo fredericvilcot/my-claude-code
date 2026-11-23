@@ -145,7 +145,8 @@ struct SettingsView: View {
     }
 
     private func refreshCleanup() {
-        let sessions = store.snapshot.sessions
+        // Never a running session (a background job can stay idle for weeks): its transcript is still in use.
+        let sessions = store.snapshot.sessions.filter { store.live[$0.info.id] == nil }
         let days = cleanupDays
         DispatchQueue.global(qos: .userInitiated).async {
             let c = SessionFiles.older(than: days, in: sessions)

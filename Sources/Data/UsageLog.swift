@@ -64,8 +64,27 @@ enum UsageLog {
         return list.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
+    /// Main transcript of each session (`<session id>.jsonl`), refreshed by every `listFiles()` call (background scans),
+    /// so that looking a transcript up never walks the projects folders on the main thread.
+    private static var index: [String: String] = [:]
+    private static let indexLock = NSLock()
+
+    static func transcriptPath(for sessionID: String) -> String? {
+        indexLock.lock(); defer { indexLock.unlock() }
+        if index.isEmpty { indexLock.unlock(); _ = listFiles(); indexLock.lock() }   // first use only
+        return index[sessionID]
+    }
+
     static func listFiles() -> [(path: String, size: UInt64)] {
         var out: [(String, UInt64)] = []
+        defer {
+            var fresh: [String: String] = [:]
+            for (path, _) in out {
+                let name = (path as NSString).lastPathComponent
+                if name.count == 42 { fresh[String(name.dropLast(6))] = path }   // UUID (36) + ".jsonl"
+            }
+            indexLock.lock(); index = fresh; indexLock.unlock()
+        }
         for root in roots {
             guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { continue }
             for case let url as URL in e where url.pathExtension == "jsonl" {

@@ -19,14 +19,22 @@ enum ActivityReader {
     /// The session's latest tool actions, most recent first.
     static func recent(for sessionID: String, limit: Int = 4) -> [SessionActivity] { Array((read(sessionID)?.recent ?? []).prefix(limit)) }
 
+    /// Last known activity, instantly; re-read in the background when the transcript grows (views showing it
+    /// refresh every second or on `UsageStore.transcriptTick`).
     private static func read(_ sessionID: String) -> (activity: SessionActivity?, recent: [SessionActivity])? {
-        guard let path = ChatLog.transcript(for: sessionID),
-              let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        guard let path = ChatLog.transcript(for: sessionID) else { return nil }
+        let size = TranscriptWork.size(of: path)
+        lock.lock(); let hit = cache[path]; lock.unlock()
+        if let hit, hit.size == size { return (hit.activity, hit.recent) }
+        TranscriptWork.schedule("activity:" + path, evenHidden: hit == nil) { _ = compute(path) }
+        return hit.map { ($0.activity, $0.recent) }
+    }
+
+    @discardableResult
+    private static func compute(_ path: String) -> (activity: SessionActivity?, recent: [SessionActivity])? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
-        lock.lock()
-        if let hit = cache[path], hit.size == size { lock.unlock(); return (hit.activity, hit.recent) }
-        lock.unlock()
         let window: UInt64 = 1536 * 1024   // big tool calls (scripts) make a few entries weigh hundreds of KB
         try? handle.seek(toOffset: size > window ? size - window : 0)
         let data = handle.readDataToEndOfFile()

@@ -117,7 +117,7 @@ final class PanelController: NSObject, NSMenuDelegate {
     @objc func toggle() {
         if isOpen, detached { panel?.orderFrontRegardless(); return }   // floating: its own buttons close/re-attach it
         if isOpen { closePanel(); return }
-        if menuBarAutoHides { openAsMenu() } else { openPanel() }
+        if menuBarAutoHides { openAsMenu(byClick: true) } else { openPanel(byClick: true) }
     }
 
     /// True when the active Space is a full-screen one (macOS Space type 4) or the menu bar hides automatically:
@@ -167,44 +167,32 @@ final class PanelController: NSObject, NSMenuDelegate {
         return menu
     }()
 
-    func openAsMenu() {
+    private var menuTiming: (click: TimeInterval?, start: TimeInterval, reset: TimeInterval, picture: TimeInterval)?
+
+    func openAsMenu(byClick: Bool = false) {
+        let start = ProcessInfo.processInfo.systemUptime
+        let click = byClick ? NSApp.currentEvent.flatMap { [.leftMouseDown, .leftMouseUp].contains($0.type) ? start - $0.timestamp : nil } : nil
         resetIfStale()
+        let afterReset = ProcessInfo.processInfo.systemUptime
         guard let item else { return }
         let size = NSSize(width: 400, height: min((NSScreen.main?.frame.height ?? 900) - 60, 900))
         menuContainer.frame = NSRect(origin: .zero, size: size)
-        menuContainer.subviews.forEach { $0.removeFromSuperview() }
-        if let picture = panelPicture(size: size) {
-            let imageView = NSImageView(frame: menuContainer.bounds)
-            imageView.image = picture
-            imageView.imageScaling = .scaleNone
-            imageView.imageAlignment = .alignTop
-            menuContainer.addSubview(imageView)
+        // One live dashboard, kept inside the menu between openings: it shows at once with its last state and
+        // updates in place (no snapshot of the panel, no rebuild).
+        let live = liveMenuDashboard ?? {
+            let hosting = NSHostingView(rootView: AnyView(DashboardView().environment(UsageStore.shared)))
+            hosting.sizingOptions = []
+            return hosting
+        }()
+        liveMenuDashboard = live
+        if live.superview !== menuContainer {
+            menuContainer.subviews.forEach { $0.removeFromSuperview() }
+            menuContainer.addSubview(live)
         }
-        // Live dashboard, added once the menu is on screen (main queue blocks also run while a menu is tracking).
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let live = self.liveMenuDashboard ?? {
-                let hosting = NSHostingView(rootView: AnyView(DashboardView().environment(UsageStore.shared)))
-                hosting.sizingOptions = []
-                return hosting
-            }()
-            self.liveMenuDashboard = live
-            live.frame = self.menuContainer.bounds
-            self.menuContainer.addSubview(live)
-            live.layoutSubtreeIfNeeded()
-            DispatchQueue.main.async { self.menuContainer.subviews.filter { $0 !== live }.forEach { $0.removeFromSuperview() } }
-        }
+        live.frame = menuContainer.bounds
+        menuTiming = (click, start, afterReset - start, ProcessInfo.processInfo.systemUptime - afterReset)
         item.menu = fullScreenMenu
         item.button?.performClick(nil)
-    }
-
-    /// Picture of the (always rendered, possibly invisible) panel content, top-aligned to `size`.
-    private func panelPicture(size: NSSize) -> NSImage? {
-        guard let view = panel?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        let image = NSImage(size: view.bounds.size)
-        image.addRepresentation(rep)
-        return image
     }
 
     /// Test helper: opens the full-screen menu, measures how long the main thread stays blocked, then closes it.
@@ -252,26 +240,54 @@ final class PanelController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        if let event = NSApp.currentEvent {
-            Self.debug(String(format: "menu affiché %.0f ms après l'appui", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
-        }
+        AppActivity.shared.set(menu: true)
+        guard let t = menuTiming else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        Self.debug(String(format: "menu : clic→code %@ · remise à zéro %.0f ms · préparation %.0f ms · ouverture %.0f ms",
+                          t.click.map { String(format: "%.0f ms", $0 * 1000) } ?? "—", t.reset * 1000, t.picture * 1000,
+                          (now - t.start - t.reset - t.picture) * 1000))
     }
 
     func menuDidClose(_ menu: NSMenu) {
+        AppActivity.shared.set(menu: false)
         // Back to the floating panel for the next click outside full screen.
         DispatchQueue.main.async { self.item?.menu = nil }
         lastClosed = Date()
+        scheduleReset()
     }
 
     /// Reopened within 2 minutes (e.g. after an accidental click outside): keep the tab, session and draft.
     /// Later: back to the overview.
     private var lastClosed = Date.distantPast
+    /// Back to the overview after two minutes closed. Done while the panel is hidden (timer at close time), so it
+    /// never opens on its previous screen and then jumps; the check at opening only covers a missed timer (sleep).
+    private var resetWork: DispatchWorkItem?
     private func resetIfStale() {
-        if Date().timeIntervalSince(lastClosed) > 120 { NotificationCenter.default.post(name: .panelReset, object: nil) }
+        resetWork?.cancel(); resetWork = nil
+        if Date().timeIntervalSince(lastClosed) > 120 {
+            NotificationCenter.default.post(name: .panelReset, object: nil)
+            panel?.contentView?.layoutSubtreeIfNeeded()
+        }
+    }
+    private func scheduleReset() {
+        resetWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isOpen else { return }
+            NotificationCenter.default.post(name: .panelReset, object: nil)
+            self.lastClosed = .distantFuture   // already reset: nothing to do at the next opening
+        }
+        resetWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: work)
     }
 
-    func openPanel() {
+    func openPanel(byClick: Bool = false) {
+        // Timing of each step, written to debug.log: click received → here, reset, on screen, first frame drawn.
+        // Only a real click on the icon has a meaningful event time (automatic openings keep an older event).
+        let now = ProcessInfo.processInfo.systemUptime
+        let clickEvent = byClick ? NSApp.currentEvent.flatMap { [.leftMouseDown, .leftMouseUp].contains($0.type) ? $0 : nil } : nil
+        let clickDelay = clickEvent.map { now - $0.timestamp }
         resetIfStale()
+        let afterReset = ProcessInfo.processInfo.systemUptime
         let panel = self.panel ?? makePanel()
         self.panel = panel
         if detached {
@@ -292,11 +308,16 @@ final class PanelController: NSObject, NSMenuDelegate {
             panel.animator().alphaValue = 1
         }
         panel.invalidateShadow()
-        if let event = NSApp.currentEvent {
-            Self.debug(String(format: "panneau affiché %.0f ms après l'appui", (ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000))
+        let shown = ProcessInfo.processInfo.systemUptime
+        CATransaction.setCompletionBlock {
+            let drawn = ProcessInfo.processInfo.systemUptime
+            Self.debug(String(format: "panneau (%@) : clic→code %@ · remise à zéro %.0f ms · affichage %.0f ms · premier rendu %.0f ms",
+                              byClick ? "clic" : "auto", clickDelay.map { String(format: "%.0f ms", $0 * 1000) } ?? "—",
+                              (afterReset - now) * 1000, (shown - afterReset) * 1000, (drawn - shown) * 1000))
         }
         item?.button?.highlight(true)
         UsageStore.shared.pollUsage()   // always show fresh /usage figures when opening
+        AppActivity.shared.set(panel: true)
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
             guard let self, !self.detached else { return }
             self.closePanel()
@@ -319,7 +340,9 @@ final class PanelController: NSObject, NSMenuDelegate {
             panel.orderFrontRegardless()
         }
         item?.button?.highlight(false)
+        AppActivity.shared.set(panel: false)
         lastClosed = Date()
+        scheduleReset()
         // On a full-screen Space an invisible window left under the menu bar keeps the app's title bar revealed
         // (white strip over Webex): really take it off screen there.
         if menuBarAutoHides { panel?.orderOut(nil) }
@@ -508,6 +531,74 @@ final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     override func cancelOperation(_ sender: Any?) { onEscape?() }
+
+    // MARK: Move from anywhere
+    //
+    // A movable panel (floating window) is dragged from any spot that isn't interactive: a click still clicks, but a
+    // drag that starts on background, text or a card moves the window. Excluded: text fields, terminals, and areas
+    // marked `.noWindowDrag()` (widget reorder handles, terminal mirror…).
+    private var pendingDown: NSEvent?
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            pendingDown = isMovable && canMoveWindow(at: event) ? event : nil
+        case .leftMouseDragged:
+            if let down = pendingDown {
+                let a = down.locationInWindow, b = event.locationInWindow
+                if hypot(b.x - a.x, b.y - a.y) > 3 {
+                    pendingDown = nil
+                    performDrag(with: down)
+                    // The drag loop ate the mouse-up: release whatever the press started, away from any control.
+                    if let up = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: -10_000, y: -10_000), modifierFlags: [],
+                                                   timestamp: event.timestamp, windowNumber: windowNumber, context: nil,
+                                                   eventNumber: 0, clickCount: 1, pressure: 0) {
+                        super.sendEvent(up)
+                    }
+                    return
+                }
+            }
+        case .leftMouseUp:
+            pendingDown = nil
+        default: break
+        }
+        super.sendEvent(event)
+    }
+
+    private func canMoveWindow(at event: NSEvent) -> Bool {
+        guard let content = contentView else { return false }
+        let point = event.locationInWindow
+        var view = content.hitTest(content.superview?.convert(point, from: nil) ?? point)
+        while let v = view {
+            if v is NSTextView || (v as? NSTextField)?.isEditable == true || v is NSScroller || v is TerminalLike { return false }
+            view = v.superview
+        }
+        return !Self.exclusions(in: content).contains { $0.convert($0.bounds, to: nil).contains(point) }
+    }
+
+    private static func exclusions(in view: NSView) -> [NSView] {
+        (view is NoWindowDragView ? [view] : []) + view.subviews.flatMap(exclusions(in:))
+    }
+}
+
+/// Views that take their own drags (terminals): never move the window from them.
+protocol TerminalLike {}
+extension AttachTerminalView: TerminalLike {}
+extension KeyCapture.KeyView: TerminalLike {}
+
+/// Marker view behind SwiftUI content that must keep its drags (see `View.noWindowDrag()`).
+final class NoWindowDragView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+struct NoWindowDragMarker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NoWindowDragView { NoWindowDragView() }
+    func updateNSView(_ nsView: NoWindowDragView, context: Context) {}
+}
+
+extension View {
+    /// Drags starting here are the view's own (reorder, selection…), never a window move.
+    func noWindowDrag() -> some View { background(NoWindowDragMarker()) }
 }
 
 /// Follows the system light/dark appearance live, border included.

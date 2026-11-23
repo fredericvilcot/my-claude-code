@@ -1,6 +1,17 @@
 import SwiftUI
 
 enum Fmt {
+    private static let stampFull: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "fr_FR"); f.dateFormat = "dd/MM/yyyy HH:mm:ss"; return f
+    }()
+    private static let stampTime: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "fr_FR"); f.dateFormat = "HH:mm:ss"; return f
+    }()
+    /// Exact timestamp: "23/11/2026 10:42:15".
+    static func stamp(_ d: Date) -> String { stampFull.string(from: d) }
+    /// Exact time to the second: "10:42:15".
+    static func stampTime(_ d: Date) -> String { stampTime.string(from: d) }
+
     private static let money: NumberFormatter = {
         let f = NumberFormatter()
         f.locale = Locale(identifier: "fr_FR")

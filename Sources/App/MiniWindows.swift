@@ -42,6 +42,7 @@ final class MiniWindows {
 
     private(set) var openKeys: [String] = []
     @ObservationIgnored private var windows: [String: NSPanel] = [:]
+    @ObservationIgnored private var observers: [String: [NSObjectProtocol]] = [:]
 
     func isOpen(_ kind: Kind) -> Bool { openKeys.contains(kind.key) }
 
@@ -85,14 +86,12 @@ final class MiniWindows {
         if frame.width < panel.minSize.width { frame.size.width = panel.minSize.width }
         panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
-        NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { _ in
-            MainActor.assumeIsolated {
-                if !CommandLine.arguments.contains("--snapshot") { UserDefaults.standard.set(NSStringFromRect(panel.frame), forKey: "mini.frame." + key) }
-            }
-        }
-        NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: panel, queue: .main) { _ in
-            MainActor.assumeIsolated {
-                if !CommandLine.arguments.contains("--snapshot") { UserDefaults.standard.set(NSStringFromRect(panel.frame), forKey: "mini.frame." + key) }
+        observers[key] = [NSWindow.didMoveNotification, NSWindow.didResizeNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak panel] _ in
+                MainActor.assumeIsolated {
+                    guard let panel else { return }
+                    if !CommandLine.arguments.contains("--snapshot") { UserDefaults.standard.set(NSStringFromRect(panel.frame), forKey: "mini.frame." + key) }
+                }
             }
         }
         windows[key] = panel
@@ -102,7 +101,14 @@ final class MiniWindows {
 
     func close(_ kind: Kind) {
         let key = kind.key
-        windows[key]?.orderOut(nil)
+        observers[key]?.forEach(NotificationCenter.default.removeObserver)
+        observers[key] = nil
+        if let w = windows[key] {
+            w.orderOut(nil)
+            // Tear the content down (after the click that closed it has been handled): its terminal client and
+            // polling loops stop with it.
+            DispatchQueue.main.async { w.contentView = nil }
+        }
         windows[key] = nil
         openKeys.removeAll { $0 == key }
         persist()
@@ -142,7 +148,10 @@ final class MiniWindows {
     /// Test captures (--snapshot) never touch the user's saved windows.
     private var isSnapshot: Bool { CommandLine.arguments.contains("--snapshot") }
 
-    private func persist() { if !isSnapshot { UserDefaults.standard.set(openKeys, forKey: "mini.open") } }
+    private func persist() {
+        AppActivity.shared.set(floating: !openKeys.isEmpty)
+        if !isSnapshot { UserDefaults.standard.set(openKeys, forKey: "mini.open") }
+    }
 
     private func savedFrame(_ key: String) -> NSRect? {
         guard let raw = UserDefaults.standard.string(forKey: "mini.frame." + key) else { return nil }
@@ -172,7 +181,16 @@ struct MiniWindowView: View {
             Group {
                 switch kind {
                 case .quotas:
-                    ScrollView { LimitsContent().padding(16) }.scrollIndicators(.never)
+                    ScrollView {
+                        VStack(alignment: .trailing, spacing: 6) {
+                            LimitsContent()
+                            if let d = store.plan?.updatedAt {
+                                Text("màj " + Fmt.stamp(d)).font(Theme.sans(10.5).monospacedDigit()).foregroundStyle(Theme.inkFaint)
+                            }
+                        }
+                        .padding(16)
+                    }
+                    .scrollIndicators(.never)
                 case .notifications:
                     NotificationCenterView(close: { MiniWindows.shared.close(.notifications) }, floating: true)
                 case .quick:
@@ -218,7 +236,7 @@ struct MiniWindowView: View {
             case .session(let id):
                 let live = store.live[id]
                 Circle().fill(live.map { PhaseBadge.color($0.phase) } ?? Color.gray).frame(width: 8, height: 8)
-                Text(store.snapshot.sessions.first { $0.info.id == id }?.name ?? "Session")
+                Text(store.snapshot.sessions.first { $0.info.id == id }.map { store.title(of: $0) } ?? "Session")
                     .font(Theme.sans(12.5, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
                 Text(live?.label ?? "fermée").font(Theme.sans(11)).foregroundStyle(Theme.inkFaint).lineLimit(1)
             }
@@ -259,11 +277,11 @@ struct SessionFollowView: View {
                     Text("\(Int((ctx.fraction * 100).rounded())) %").font(Theme.sans(12, .semibold).monospacedDigit())
                         .foregroundStyle(ctx.fraction >= 0.8 ? contextColor(ctx.fraction) : Theme.ink)
                         .fixedSize()
-                    if let live { CompactButton(session: session, live: live, compact: true).fixedSize() }
+                    SessionActions(session: session, live: live)
                 }
                 // Terminal and agent-to-agent messages: two foldable cards, opening one folds the other.
                 VStack(spacing: 0) {
-                    Block(title: "Terminal", note: live?.pid != nil ? "clic pour taper" : "journal") {
+                    Block(title: "Terminal", note: live != nil ? "clic pour taper" : "journal") {
                         TerminalMirrorView(session: session, live: live, fill: true)
                             .frame(minHeight: 110, maxHeight: .infinity)
                     }

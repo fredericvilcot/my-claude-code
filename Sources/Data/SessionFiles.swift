@@ -50,13 +50,21 @@ enum SessionFiles {
 
     /// Moves a session's transcripts to the Trash and hides it.
     static func delete(_ session: SessionStat) {
+        // A background job (live or finished) is Claude Code's own record: remove it the official way.
+        let job = String(session.info.id.prefix(8))
+        if BackgroundJobs.exists(job) { BackgroundJobs.stopAndRemove(job) }
         trash(files(for: session.info.id))
         hidden.insert(session.info.id)
     }
 
-    /// Stops a running interactive session (its terminal tab stays open on the shell).
+    /// Stops a running session: background ones through `claude stop`, interactive ones with SIGTERM (their
+    /// terminal tab stays open on the shell).
     @discardableResult
     static func stop(_ live: LiveSession) -> Bool {
+        if live.kind == "background" {
+            BackgroundJobs.stopAndRemove(live.shortId) { UsageStore.shared.refreshAll() }
+            return true
+        }
         guard let pid = live.pid, pid > 1 else { return false }
         return kill(pid, SIGTERM) == 0
     }
@@ -68,10 +76,8 @@ enum SessionFiles {
     }
 
     static func copyResumeCommand(for session: SessionStat) {
-        let project = session.info.project.replacingOccurrences(of: "'", with: "'\\''")
-        let command = session.info.project.isEmpty
-            ? "claude --resume \(session.info.id)"
-            : "cd '\(project)' && claude --resume \(session.info.id)"
+        let resume = "claude --resume " + SessionLauncher.shellQuote(session.info.id)
+        let command = session.info.project.isEmpty ? resume : "cd \(SessionLauncher.shellQuote(session.info.project)) && " + resume
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command, forType: .string)
     }

@@ -24,10 +24,8 @@ struct SendJob: Identifiable, Codable {
     var stepLabel: String {
         let t = duration
         if resume { return t < 4 ? "Préparation de la relance…" : "Relance de la session en arrière-plan…" }
-        if t < 3 { return "Démarrage d'un relais Claude Code…" }
-        if t < 7 { return "Connexion à \(recipient)…" }
-        if t < 12 { return "Remise du message…" }
-        return "Transmis · en attente de la réponse…"
+        if t < 3 { return "Envoi à \(recipient)…" }
+        return "Remise du message à \(recipient)…"
     }
 
     var summary: String {

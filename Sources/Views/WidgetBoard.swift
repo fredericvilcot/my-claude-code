@@ -39,11 +39,13 @@ struct WidgetBoard<W: BoardWidget, Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 0) {
+            // Lazy: only the widgets on screen are built (switching tabs stays instant); heights measured once are
+            // kept for drag and drop.
+            LazyVStack(spacing: 0) {
                 ForEach(visible) { w in
                     content(w)
                         .overlay(alignment: .top) {
-                            if !w.pinned { BoardHandle(active: dragged == w).padding(.top, 12).gesture(drag(w)) }
+                            if !w.pinned { BoardHandle(active: dragged == w).noWindowDrag().padding(.top, 12).gesture(drag(w)) }
                         }
                         .environment(\.widgetRemove, w.pinned ? nil : { hide(w) })
                         .background(GeometryReader { g in
@@ -57,7 +59,9 @@ struct WidgetBoard<W: BoardWidget, Content: View>: View {
             }
             .padding(.bottom, 12)
             .coordinateSpace(name: "board")
-            .onPreferenceChange(BoardFramesKey.self) { frames = $0 }
+            .onPreferenceChange(BoardFramesKey.self) { new in
+                if dragged != nil || new.contains(where: { frames[$0.key] != $0.value }) { frames.merge(new) { $1 } }
+            }
         }
         .scrollIndicators(.never)
     }

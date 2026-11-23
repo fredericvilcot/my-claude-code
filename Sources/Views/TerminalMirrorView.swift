@@ -1,7 +1,10 @@
 import SwiftUI
 
-/// A session's terminal, mirrored: a dark window frame (traffic-light dots, tab name, live dot) around the exact
-/// screen of its iTerm tab. Background sessions (no tab) fall back to the activity log.
+/// A session's terminal, in a dark window frame (traffic-light dots, tab name, live dot):
+/// - background session: a real terminal running `claude attach` (its own interface, keyboard included);
+/// - interactive session: the exact screen of its iTerm tab, character for character, in the tab's font and colours,
+///   with the keyboard forwarded to the tab on click;
+/// - closed session: its history, rebuilt from the transcript.
 @MainActor
 struct TerminalMirrorView: View {
     let session: SessionStat
@@ -9,22 +12,34 @@ struct TerminalMirrorView: View {
     var fill = false
     @State private var mirror: TerminalMirror?
     @State private var transcript: [TerminalMirror.Row] = []
-    @State private var input = ""
-    /// The terminal has the keyboard: every key goes to the session's iTerm tab.
+    /// The terminal has the keyboard: every key goes to the session.
     @State private var keyboard = false
-    @State private var inputError: String?
+    /// The embedded `claude attach` client has exited (session stopped, or detached with ←/⌃C).
+    @State private var attachEnded = false
+    @State private var attachGeneration = 0
+
+    private var attachedJob: String? {
+        guard let live, live.kind == "background", !live.shortId.isEmpty else { return nil }
+        return live.shortId
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             windowBar
             content
         }
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Term.background))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: ITermProfile.current.background)))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .strokeBorder(keyboard ? Theme.clay.opacity(0.8) : Color.white.opacity(0.07), lineWidth: keyboard ? 1.5 : 1))
         .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-        .task(id: live?.pid) { await poll() }
+        .noWindowDrag()
+        .task(id: "\(live?.pid ?? 0)-\(live?.kind ?? "")-\(session.info.id)") { await poll() }
+    }
+
+    private var isLive: Bool {
+        if attachedJob != nil { return !attachEnded }
+        return mirror != nil && mirror?.failure == nil
     }
 
     private var windowBar: some View {
@@ -34,13 +49,13 @@ struct TerminalMirrorView: View {
             }
             Text(title).font(Term.mono(10.5)).foregroundStyle(Term.dim).lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: .infinity)
-            if mirror == nil || mirror?.failure != nil {
+            if !isLive {
                 Text("journal").font(Term.mono(9.5, .semibold)).foregroundStyle(Term.dim)
             } else {
                 if keyboard {
                     Label("clavier", systemImage: "keyboard").font(Term.mono(9.5, .semibold)).foregroundStyle(Theme.clay)
                 }
-                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                TimelineView(.whileShown(1)) { ctx in
                     HStack(spacing: 4) {
                         Circle().fill(Term.green).frame(width: 6, height: 6)
                             .opacity(Int(ctx.date.timeIntervalSince1970) % 2 == 0 ? 1 : 0.4)
@@ -56,12 +71,37 @@ struct TerminalMirrorView: View {
 
     private var title: String {
         if let m = mirror, !m.tabName.isEmpty { return m.tabName }
-        return live?.name.isEmpty == false ? live!.name : session.name
+        if let live, !live.name.isEmpty { return attachedJob != nil ? "claude attach \(live.shortId) · \(live.name)" : live.name }
+        return session.displayName
     }
+
+    private var frameHeight: (min: CGFloat, max: CGFloat) { fill ? (160, .infinity) : (340, 340) }
 
     @ViewBuilder
     private var content: some View {
-        if let mirror, mirror.failure == nil {
+        if let job = attachedJob {
+            ZStack {
+                AttachedTerminal(job: job, directory: session.info.project, focused: $keyboard, ended: $attachEnded)
+                    .id(attachGeneration)
+                    .padding(.leading, 8).padding(.vertical, 4)
+                if attachEnded {
+                    VStack(spacing: 10) {
+                        Text("Terminal détaché de la session.").font(Term.mono(11)).foregroundStyle(Term.dim)
+                        Button { attachEnded = false; attachGeneration += 1 } label: {
+                            Label("Rattacher", systemImage: "arrow.uturn.left").font(Term.mono(11, .semibold))
+                                .foregroundStyle(Term.green)
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(Capsule().strokeBorder(Term.green.opacity(0.5), lineWidth: 1))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(nsColor: ITermProfile.current.background).opacity(0.92))
+                }
+            }
+            .frame(minHeight: frameHeight.min, maxHeight: frameHeight.max)
+        } else if let mirror, mirror.failure == nil {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     // iTerm only exposes the visible screen: the session's history above it comes from its transcript.
@@ -74,9 +114,9 @@ struct TerminalMirrorView: View {
                         }
                         .padding(.vertical, 4)
                     }
-                    TermRowsView(rows: mirror.rows)
+                    ITermScreen(lines: mirror.lines, styled: mirror.styled, columns: mirror.columns)
                 }
-                .padding(.horizontal, 14).padding(.vertical, 12)
+                .padding(.horizontal, 12).padding(.vertical, 10)
             }
             // Click the screen to give it the keyboard: arrows, Return, Esc, Tab, ⌫, ⌃C and text go to iTerm.
             .overlay {
@@ -84,9 +124,9 @@ struct TerminalMirrorView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollIndicators(.never)
-            .frame(minHeight: fill ? 120 : 340, maxHeight: fill ? .infinity : 340)
+            .frame(minHeight: frameHeight.min, maxHeight: frameHeight.max)
         } else {
-            // No iTerm tab (closed session, background agent, iTerm unreachable): rebuilt from the transcript.
+            // No terminal (closed session, iTerm unreachable): rebuilt from the transcript.
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     if let failure = mirror?.failure {
@@ -102,71 +142,92 @@ struct TerminalMirrorView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollIndicators(.never)
-            .frame(minHeight: fill ? 120 : 340, maxHeight: fill ? .infinity : 340)
-        }
-    }
-
-    /// Typing here is typing in the session's terminal: the text goes to its iTerm tab, followed by Return.
-    private func promptLine(_ mirror: TerminalMirror) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 7) {
-                Text("❯").font(Term.mono(12, .bold)).foregroundStyle(Term.green)
-                TextField("", text: $input, prompt: Text("Écrire à l'agent, comme dans le terminal…").foregroundStyle(Term.dim))
-                    .textFieldStyle(.plain)
-                    .font(Term.mono(11.5)).foregroundStyle(Term.text)
-                    .onSubmit { type(into: mirror) }
-            }
-            if let inputError { Text(inputError).font(Term.mono(10)).foregroundStyle(Term.amber) }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 9)
-        .background(Color.white.opacity(0.03))
-        .overlay(alignment: .top) { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 0.5) }
-    }
-
-    private func type(into mirror: TerminalMirror) {
-        let text = input.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { return }
-        input = ""
-        Compactor.type(text, tty: mirror.tty) { error in
-            inputError = error
-            Task { await mirror.refresh() }   // show it right away
+            .frame(minHeight: frameHeight.min, maxHeight: frameHeight.max)
         }
     }
 
     private func poll() async {
-        guard let pid = live?.pid, let tty = Compactor.tty(of: pid) else {
+        attachEnded = false
+        // Background session: the embedded terminal is the session itself, nothing to poll.
+        if attachedJob != nil { mirror = nil; return }
+        var tty: String?
+        if let pid = SessionLineage.terminalPID(for: session.info.id, live: live) {
+            tty = await Task.detached(priority: .userInitiated) { Compactor.tty(of: pid) }.value
+        }
+        guard !Task.isCancelled else { return }
+        guard let tty else {
             mirror = nil
-            // Rebuilt from the transcript; refreshed while the session is still running (background agent).
-            repeat {
-                let id = session.info.id
-                transcript = await Task.detached { TranscriptTerminal.rows(for: id) }.value
-                if live == nil { return }
-                try? await Task.sleep(for: .seconds(2))
-            } while !Task.isCancelled
+            keyboard = false
+            let id = session.info.id
+            transcript = await Task.detached { TranscriptTerminal.rows(for: id) }.value
             return
         }
         let m = mirror?.tty == tty ? mirror! : TerminalMirror(tty: tty)
         mirror = m
         var lastHistory = Date.distantPast
         while !Task.isCancelled {
+            // Panel hidden and no floating window: no AppleScript traffic (iTerm stays idle too).
+            guard AppActivity.shared.visible else { try? await Task.sleep(for: .seconds(1)); continue }
             await m.refresh()
-            // History (transcript) under the live screen: refreshed every few seconds, cached by file size.
+            // History (transcript) above the live screen: refreshed every few seconds, cached by file size.
             if Date().timeIntervalSince(lastHistory) > 3 {
                 lastHistory = Date()
                 let id = session.info.id
                 let history = await Task.detached { TranscriptTerminal.rows(for: id) }.value
                 if history != transcript { transcript = history }
             }
-            if keyboard {   // typing: refresh every 150 ms (each send also refreshes at once)
-                try? await Task.sleep(for: .milliseconds(150))
-                continue
-            }
-            if m.failure != nil, transcript.isEmpty {
-                let id = session.info.id
-                transcript = await Task.detached { TranscriptTerminal.rows(for: id) }.value
-            }
-            try? await Task.sleep(for: .seconds(1))
+            // Typing: refresh every 150 ms (each send also refreshes at once); otherwise every second. Tab not found:
+            // each attempt walks every iTerm window, so retry every 5 s only.
+            try? await Task.sleep(for: m.failure != nil ? .seconds(5) : keyboard ? .milliseconds(150) : .seconds(1))
         }
+    }
+}
+
+/// An iTerm screen drawn exactly: same characters, same line breaks, the tab's font and colours, no wrapping.
+/// The font shrinks so that the tab's full width fits, down to a readable minimum; beyond, the screen scrolls sideways.
+struct ITermScreen: View {
+    let lines: [String]
+    var styled: [AttributedString]? = nil
+    let columns: Int
+
+    var body: some View {
+        let profile = ITermProfile.current
+        GeometryReader { geo in
+            let base = profile.font
+            let advance = max(1, ("M" as NSString).size(withAttributes: [.font: base]).width)
+            let fit = base.pointSize * geo.size.width / (advance * CGFloat(max(columns, 20)))
+            let size = min(base.pointSize, max(10, fit))
+            let font = Font(NSFont(descriptor: base.fontDescriptor, size: size) ?? base)
+            let screen = VStack(alignment: .leading, spacing: 0) {
+                if let styled {
+                    ForEach(Array(styled.enumerated()), id: \.offset) { _, line in
+                        Text(line.characters.isEmpty ? AttributedString(" ") : line).font(font)
+                            .foregroundStyle(Color(nsColor: profile.foreground))
+                            .lineLimit(1).fixedSize()
+                    }
+                } else {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                        Text(line.isEmpty ? " " : line).font(font).foregroundStyle(Color(nsColor: profile.foreground))
+                            .lineLimit(1).fixedSize()
+                    }
+                }
+            }
+            .textSelection(.enabled)
+            .background(GeometryReader { inner in Color.clear.preference(key: ScreenHeight.self, value: inner.size.height) })
+            if fit < 10 {
+                ScrollView(.horizontal) { screen }.scrollIndicators(.automatic)
+            } else {
+                screen.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(height: height)
+        .onPreferenceChange(ScreenHeight.self) { height = $0 }
+    }
+
+    @State private var height: CGFloat = 200
+    private struct ScreenHeight: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
     }
 }
 
@@ -180,12 +241,15 @@ struct KeyCapture: NSViewRepresentable {
     final class KeyView: NSView {
         var send: (String) -> Void = { _ in }
         var onFocus: (Bool) -> Void = { _ in }
-        override var acceptsFirstResponder: Bool { true }
+        /// Takes the keyboard only after a click in it: never automatically when the panel becomes key (Escape and
+        /// typing would otherwise go to the session instead of the panel).
+        private var clicked = false
+        override var acceptsFirstResponder: Bool { clicked }
         override var needsPanelToBecomeKey: Bool { true }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-        override func mouseDown(with event: NSEvent) { window?.makeKey(); window?.makeFirstResponder(self) }
+        override func mouseDown(with event: NSEvent) { clicked = true; window?.makeKey(); window?.makeFirstResponder(self) }
         override func becomeFirstResponder() -> Bool { onFocus(true); return true }
-        override func resignFirstResponder() -> Bool { onFocus(false); return true }
+        override func resignFirstResponder() -> Bool { clicked = false; onFocus(false); return true }
         // Let trackpad/wheel scrolling through to the scroll view underneath: this layer only takes clicks and keys.
         override func hitTest(_ point: NSPoint) -> NSView? {
             if let type = NSApp.currentEvent?.type, type == .scrollWheel || type == .magnify || type == .swipe { return nil }
@@ -204,6 +268,10 @@ struct KeyCapture: NSViewRepresentable {
             case 48: send(event.modifierFlags.contains(.shift) ? esc + "[Z" : "\t"); return   // Tab / ⇧Tab
             case 51: send("\u{7F}"); return             // ⌫
             case 117: send(esc + "[3~"); return         // ⌦
+            case 115: send(esc + "[H"); return          // ↖ Home
+            case 119: send(esc + "[F"); return          // ↘ End
+            case 116: send(esc + "[5~"); return         // ⇞ Page up
+            case 121: send(esc + "[6~"); return         // ⇟ Page down
             default: break
             }
             if event.modifierFlags.contains(.control), let c = event.charactersIgnoringModifiers?.lowercased().unicodeScalars.first,
@@ -212,7 +280,10 @@ struct KeyCapture: NSViewRepresentable {
                 return
             }
             if event.modifierFlags.contains(.command) { super.keyDown(with: event); return }
-            if let chars = event.characters, !chars.isEmpty { send(chars) }
+            // Function keys arrive as private-use characters (U+F700…): never type them as text.
+            if let chars = event.characters, !chars.isEmpty, !chars.unicodeScalars.contains(where: { (0xF700...0xF8FF).contains($0.value) }) {
+                send(chars)
+            }
         }
     }
 

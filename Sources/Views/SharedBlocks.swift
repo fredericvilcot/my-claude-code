@@ -194,7 +194,7 @@ struct ActiveSessionsBlock: View {
                         Button { NotificationCenter.default.post(name: .openSession, object: s.index) } label: {
                         VStack(alignment: .leading, spacing: 7) {
                             HStack(alignment: .firstTextBaseline) {
-                                Text(s.name).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
+                                Text(s.displayName).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
                                 if let b = s.info.branch, !b.isEmpty, b != "HEAD" {
                                     Text(b).font(Theme.sans(11)).foregroundStyle(Theme.inkSoft).lineLimit(1)
                                 }
@@ -206,9 +206,7 @@ struct ActiveSessionsBlock: View {
                             Bar(fraction: ctx.fraction, color: contextColor(ctx.fraction), height: 9)
                             if let live = store.live[s.info.id] {
                                 ActivityLine(sessionID: s.info.id, live: live)
-                                if ctx.fraction >= 0.5 || Compactor.shared.step(s.info.id) != nil {
-                                    CompactButton(session: s, live: live, compact: true)
-                                }
+                                HStack { Spacer(); SessionActions(session: s, live: live) }
                             }
                             Text([store.live[s.info.id].map { "@" + $0.name }, Fmt.model(s.lastModel),
                                   "\(Fmt.tokens(s.lastContext)) / \(Fmt.tokens(s.contextWindow))",
@@ -284,7 +282,7 @@ struct MenuCompactView: View {
                     let ctx = store.context(of: s)
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
-                            Text(s.name).font(Theme.sans(13, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
+                            Text(s.displayName).font(Theme.sans(13, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
                             Spacer()
                             Text("\(Int((ctx.fraction * 100).rounded())) %").font(Theme.sans(14, .semibold).monospacedDigit())
                                 .foregroundStyle(ctx.fraction >= 0.8 ? contextColor(ctx.fraction) : Theme.ink)
@@ -307,7 +305,7 @@ struct ActivityLine: View {
     let live: LiveSession
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
+        TimelineView(.whileShown(1)) { _ in
             let a = ActivityReader.activity(for: sessionID)
             let working = live.phase == 0 && (a?.working ?? true)
             HStack(spacing: 6) {
@@ -336,7 +334,68 @@ struct ActivityLine: View {
     }
 }
 
-/// "Compacter": synthesis note then /compact, typed into the session's iTerm tab (see Compactor).
+/// One look for every session action ("Compacter", "Relancer à neuf"): on cards a discreet outlined circle with an
+/// icon (spinner while running, orange when it failed, details in the tooltip); in the session sheet the same outline
+/// as a capsule with its label. Never wraps.
+struct SessionActionLabel: View {
+    let symbol: String
+    let title: String
+    var compact: Bool
+    var busy = false
+    var failed = false
+    var confirm: String? = nil
+    @State private var hovering = false
+
+    var body: some View {
+        let tint: Color = confirm != nil ? .white : (failed ? .orange : Theme.clayDeep)
+        let stroke = (failed ? Color.orange : Theme.clay).opacity(0.55)
+        let icon = Group {
+            if busy { ProgressView().controlSize(.mini).scaleEffect(0.75) }
+            else { Image(systemName: failed && confirm == nil ? "exclamationmark" : symbol).font(.system(size: 10.5, weight: .bold)) }
+        }
+        .frame(width: 12, height: 12)
+        Group {
+            if compact && confirm == nil {
+                icon
+                    .frame(width: 26, height: 26)
+                    .background(Circle().fill(hovering ? Theme.clay.opacity(0.12) : Color.clear))
+                    .overlay(Circle().strokeBorder(stroke, lineWidth: 1))
+                    .contentShape(Circle())
+            } else {
+                HStack(spacing: 5) {
+                    icon
+                    Text(confirm ?? title).font(Theme.sans(compact ? 11 : 12, .semibold)).lineLimit(1).fixedSize()
+                }
+                .padding(.horizontal, 10)
+                .frame(height: compact ? 26 : 28)
+                .background(Capsule().fill(confirm != nil ? Color.red : (hovering ? Theme.clay.opacity(0.12) : Color.clear)))
+                .overlay(Capsule().strokeBorder(confirm != nil ? Color.clear : stroke, lineWidth: 1))
+                .contentShape(Capsule())
+            }
+        }
+        .foregroundStyle(tint)
+        .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hovering = h } }
+    }
+}
+
+/// Both session actions side by side, everywhere the same.
+struct SessionActions: View {
+    let session: SessionStat
+    let live: LiveSession?
+    var compact = true
+
+    var body: some View {
+        if let live {
+            HStack(spacing: compact ? 6 : 8) {
+                CompactButton(session: session, live: live, compact: compact)
+                RestartButton(session: session, live: live, compact: compact)
+            }
+            .fixedSize()
+        }
+    }
+}
+
+/// "Compacter" (see Compactor): synthesis note, then /compact keeping it.
 @MainActor
 struct CompactButton: View {
     let session: SessionStat
@@ -346,26 +405,14 @@ struct CompactButton: View {
 
     var body: some View {
         let step = compactor.step(session.info.id)
-        HStack(spacing: 8) {
-            if let live, live.pid != nil {
-                Button { compactor.compact(session, live: live) } label: {
-                    HStack(spacing: 5) {
-                        if busy(step) { ProgressView().controlSize(.mini).scaleEffect(0.8) }
-                        else { Image(systemName: "arrow.down.right.and.arrow.up.left").font(.system(size: 10, weight: .bold)) }
-                        Text(label(step)).font(Theme.sans(compact ? 11 : 12, .semibold))
-                    }
-                    .foregroundStyle(busy(step) ? Theme.clayDeep : .white)
-                    .padding(.horizontal, compact ? 9 : 11).padding(.vertical, compact ? 4 : 6)
-                    .background(Capsule().fill(busy(step) ? Theme.clay.opacity(0.14) : Theme.clay))
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(busy(step))
-                .tip("Fait rédiger à la session une note de synthèse (objectif, état, décisions, fichiers, prochaines étapes) dans ~/.claude/session-notes, puis lance /compact en la conservant.")
+        if let live {
+            Button { compactor.compact(session, live: live) } label: {
+                SessionActionLabel(symbol: "arrow.down.right.and.arrow.up.left", title: busy(step) ? label(step) : "Compacter",
+                                   compact: compact, busy: busy(step), failed: isError(step))
             }
-            if let text = status(step) {
-                Text(text).font(Theme.sans(11)).foregroundStyle(isError(step) ? Color.orange : Theme.inkSoft).lineLimit(2)
-            }
+            .buttonStyle(.plain)
+            .disabled(busy(step))
+            .tip(tip(step))
         }
     }
 
@@ -380,11 +427,14 @@ struct CompactButton: View {
         default: "Compacter"
         }
     }
-    private func status(_ s: Compactor.Step?) -> String? {
+    private func tip(_ s: Compactor.Step?) -> String {
+        let what = "Compacter : la session rédige une note de synthèse dans ~/.claude/session-notes, puis /compact la conserve."
         switch s {
-        case .done(let note): "Compacté · note \((note as NSString).lastPathComponent)"
-        case .failed(let why): why
-        default: nil
+        case .writingNote: return "Note de synthèse en cours…"
+        case .compacting: return "Compaction en cours…"
+        case .done(let note): return "Compacté · note \((note as NSString).lastPathComponent)\n\n" + what
+        case .failed(let why): return "Échec : \(why)\n\n" + what
+        default: return what
         }
     }
 }
@@ -422,5 +472,54 @@ struct ActionTile: View {
         }
         .buttonStyle(.plain)
         .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hovering = h } }
+    }
+}
+
+/// "Relancer à neuf" (see Restarter), next to "Compacter". Destructive: the first click turns it into a red
+/// "Relancer à neuf ?" for 4 s, the second starts it. Progress and failures show in place and in the tooltip.
+@MainActor
+struct RestartButton: View {
+    let session: SessionStat
+    let live: LiveSession?
+    var compact = false
+    @State private var confirming = false
+    private var restarter: Restarter { Restarter.shared }
+
+    var body: some View {
+        let step = restarter.step(session.info.id)
+        let busy = restarter.isBusy(session.info.id)
+        if let live {
+            Button {
+                guard !busy else { return }
+                if confirming {
+                    confirming = false
+                    restarter.restart(session, live: live)
+                } else {
+                    withAnimation(.snappy(duration: 0.18)) { confirming = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) { withAnimation(.snappy(duration: 0.18)) { confirming = false } }
+                }
+            } label: {
+                SessionActionLabel(symbol: "arrow.triangle.2.circlepath", title: label(step, busy: busy) ?? "Relancer à neuf",
+                                   compact: compact, busy: busy, failed: { if case .failed = step { return true }; return false }(),
+                                   confirm: confirming ? "Relancer à neuf ?" : nil)
+            }
+            .buttonStyle(.plain)
+            .tip(tip(step))
+        }
+    }
+
+    private func tip(_ s: Restarter.Step?) -> String {
+        let what = "Relancer à neuf : la session rédige une note de synthèse, une nouvelle session la reprend dans un nouvel onglet iTerm, puis celle-ci est fermée et son journal placé à la Corbeille. Rien n'est fermé si une étape échoue."
+        if case .failed(let why) = s { return "Échec : \(why)\n\n" + what }
+        return label(s, busy: true).map { $0 + "\n\n" + what } ?? what
+    }
+
+    private func label(_ s: Restarter.Step?, busy: Bool) -> String? {
+        switch s {
+        case .writingNote: return "Note de synthèse…"
+        case .opening: return "Nouvel onglet…"
+        case .switching: return "Bascule…"
+        default: return nil
+        }
     }
 }

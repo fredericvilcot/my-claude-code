@@ -240,7 +240,7 @@ struct OverviewView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .firstTextBaseline) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(s.name).font(Theme.serif(18, .medium)).foregroundStyle(Theme.ink).lineLimit(1)
+                            Text(s.displayName).font(Theme.serif(18, .medium)).foregroundStyle(Theme.ink).lineLimit(1)
                             Text([s.info.branch.map { "⎇ " + $0 }, s.models.max { $0.value < $1.value }.map { Fmt.model($0.key) }]
                                 .compactMap { $0 }.joined(separator: "  ·  "))
                                 .font(Theme.sans(11.5)).foregroundStyle(Theme.inkSoft).lineLimit(1)
@@ -364,7 +364,7 @@ struct SessionLine: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(session.name).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
+                    Text(session.displayName).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
                     if let branch = session.info.branch, !branch.isEmpty, branch != "HEAD" {
                         Text(branch).font(Theme.sans(10.5, .medium)).foregroundStyle(Theme.inkSoft).lineLimit(1)
                             .padding(.horizontal, 6).padding(.vertical, 2)

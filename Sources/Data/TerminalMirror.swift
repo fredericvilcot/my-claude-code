@@ -1,20 +1,26 @@
 import AppKit
 import Observation
 
-/// Live mirror of a session's iTerm tab: the exact screen contents, read through iTerm's AppleScript `contents`
-/// (no keystrokes, read only), refreshed every second while shown.
+/// Live mirror of a session's iTerm tab: the exact screen contents, character for character, read through iTerm's
+/// AppleScript `contents` with the tab's column count, refreshed every second while shown. Keys typed in the app are
+/// written to the tab.
 @MainActor
 @Observable
 final class TerminalMirror {
     /// A mirrored screen line: text, or a horizontal rule (Claude Code's separators, drawn natively).
     enum Row: Equatable { case text(String), rule }
-    private(set) var rows: [Row] = []
+    /// The screen, line by line, exactly as iTerm shows it (only trailing blanks dropped).
+    private(set) var lines: [String] = []
+    /// The same screen with iTerm's colours and styles (iTerm API enabled), else nil.
+    private(set) var styled: [AttributedString]?
+    /// Width of the tab in characters (to draw the screen at the same proportions).
+    private(set) var columns = 80
     private(set) var tabName = ""
     private(set) var failure: String?
     let tty: String
 
-    /// One serial queue for all AppleScript calls (NSAppleScript is not thread-safe).
-    nonisolated private static let queue = DispatchQueue(label: "mcc.iterm.mirror")
+    /// The app-wide AppleScript queue (NSAppleScript is not thread-safe).
+    nonisolated private static var queue: DispatchQueue { ITermScript.queue }
 
     init(tty: String) { self.tty = tty }
 
@@ -90,7 +96,7 @@ final class TerminalMirror {
                     tell session j of tab i of current window to write text (item 7 of argv) newline NO
                     return "OK"
                 end if
-                return (name of session j of tab i of current window) & (ASCII character 30) & (contents of session j of tab i of current window)
+                return (name of session j of tab i of current window) & (ASCII character 30) & (columns of session j of tab i of current window) & (ASCII character 30) & (contents of session j of tab i of current window)
             else
                 set w to window id ((item 3 of argv) as integer)
                 if tty of session j of tab i of w is not ttyName then return "MISS"
@@ -98,7 +104,7 @@ final class TerminalMirror {
                     tell session j of tab i of w to write text (item 7 of argv) newline NO
                     return "OK"
                 end if
-                return (name of session j of tab i of w) & (ASCII character 30) & (contents of session j of tab i of w)
+                return (name of session j of tab i of w) & (ASCII character 30) & (columns of session j of tab i of w) & (ASCII character 30) & (contents of session j of tab i of w)
             end if
         end tell
     end run
@@ -138,8 +144,12 @@ final class TerminalMirror {
         sending = true
         let text = pending
         pending = ""
+        let tty = self.tty
         Self.queue.async {
-            _ = self.act("send", text)
+            // Through iTerm's API when enabled (reaches the hidden hotkey window too), else AppleScript.
+            if !(ITermAPI.isEnabled && ITermAPI.shared.session(tty: tty).map({ ITermAPI.shared.send(text, session: $0.id) }) == true) {
+                _ = self.act("send", text)
+            }
             DispatchQueue.main.async {
                 self.sending = false
                 if !self.pending.isEmpty { self.flush() }
@@ -151,17 +161,46 @@ final class TerminalMirror {
     // MARK: Screen
 
     func refresh() async {
+        // Colours: iTerm's API gives every cell with its style.
+        if ITermAPI.isEnabled {
+            let palette = ITermAPI.Palette(ITermProfile.current), tty = self.tty
+            let screen: (lines: [AttributedString], columns: Int, title: String)? = await withCheckedContinuation { cont in
+                Self.queue.async {
+                    guard let s = ITermAPI.shared.session(tty: tty) else { cont.resume(returning: nil); return }
+                    guard let lines = ITermAPI.shared.screen(session: s.id, palette: palette) else {
+                        ITermAPI.shared.forget(tty: tty)
+                        cont.resume(returning: nil); return
+                    }
+                    cont.resume(returning: (lines, s.columns, s.title))
+                }
+            }
+            if let screen {
+                failure = nil
+                if !screen.title.isEmpty, tabName != screen.title { tabName = screen.title }
+                if screen.columns > 0, screen.columns != columns { columns = screen.columns }
+                if screen.lines != styled { styled = screen.lines }
+                return
+            }
+        }
+        if styled != nil { styled = nil }
         let out: String? = await withCheckedContinuation { cont in
             Self.queue.async { cont.resume(returning: self.act("read")) }
         }
-        guard let out, let sep = out.firstIndex(of: "\u{1E}") else {
+        let parts = out?.split(separator: "\u{1E}", maxSplits: 2, omittingEmptySubsequences: false) ?? []
+        guard parts.count == 3 else {
             failure = "Onglet iTerm introuvable."
             return
         }
         failure = nil
-        tabName = String(out[..<sep])
-        let cleaned = Self.clean(String(out[out.index(after: sep)...]))
-        if cleaned != rows { rows = cleaned }
+        if tabName != String(parts[0]) { tabName = String(parts[0]) }
+        if let c = Int(parts[1]), c > 0, c != columns { columns = c }
+        var screen = parts[2].components(separatedBy: "\n").map { line -> String in
+            var l = line
+            while l.last == " " { l.removeLast() }
+            return l
+        }
+        while screen.last?.isEmpty == true { screen.removeLast() }
+        if screen != lines { lines = screen }
     }
 
     /// Lines made of box-drawing characters become rules; box borders around a line are dropped; runs of rules

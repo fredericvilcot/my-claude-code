@@ -35,7 +35,7 @@ struct LiveView: View {
 
     private var quotasCard: some View {
         let detached = MiniWindows.shared.isOpen(.quotas)
-        return Block(title: "Quotas", note: store.plan.map { OverviewView.ago($0.updatedAt) },
+        return Block(title: "Quotas", note: store.plan.map { "màj " + Fmt.stampTime($0.updatedAt) },
                      detach: (detached, { MiniWindows.shared.toggle(.quotas) })) {
             LimitsContent()
         }
@@ -146,7 +146,7 @@ struct LiveSessionCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 8) {
                 Circle().fill(PhaseBadge.color(live.phase)).frame(width: 8, height: 8)
-                Text(session.name).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
+                Text(store.title(of: session)).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
                 if let b = session.info.branch, !b.isEmpty, b != "HEAD" {
                     Text(b).font(Theme.sans(10.5, .medium)).foregroundStyle(Theme.inkSoft).lineLimit(1)
                         .padding(.horizontal, 5).padding(.vertical, 1)
@@ -154,6 +154,11 @@ struct LiveSessionCard: View {
                 }
                 Spacer(minLength: 4)
                 FollowButton(sessionID: session.info.id)
+            }
+            if !live.name.isEmpty, live.name != store.title(of: session) {
+                Text("@" + live.name).font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundStyle(Theme.inkFaint)
+                    .lineLimit(1)
+                    .tip("Nom technique de la session, utilisé par la messagerie entre agents")
             }
             ActivityLine(sessionID: session.info.id, live: live)
             if live.phase == 0, let p = ActivityReader.activity(for: session.info.id)?.precision, !p.isEmpty {
@@ -165,9 +170,7 @@ struct LiveSessionCard: View {
                 Bar(fraction: ctx.fraction, color: contextColor(ctx.fraction), height: 5)
                 Text("\(Int((ctx.fraction * 100).rounded())) %").font(Theme.sans(11.5, .semibold).monospacedDigit())
                     .foregroundStyle(ctx.fraction >= 0.8 ? contextColor(ctx.fraction) : Theme.ink)
-                if ctx.fraction >= 0.5 || Compactor.shared.step(session.info.id) != nil {
-                    CompactButton(session: session, live: live, compact: true)
-                }
+                SessionActions(session: session, live: live)
             }
         }
         .padding(12)

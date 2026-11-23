@@ -28,7 +28,8 @@ struct ChatPanel: View {
         let since = Date().timeIntervalSince1970 - 7 * 86400
         let hidden = SessionFiles.hidden
         return Array(store.snapshot.sessions
-            .filter { $0.info.id != session.info.id && store.live[$0.info.id] == nil && $0.info.last > since && !hidden.contains($0.info.id) }
+            .filter { $0.info.id != session.info.id && store.live[$0.info.id] == nil && $0.info.last > since && !hidden.contains($0.info.id)
+                && !SessionLineage.isParked($0.info.id) }
             .sorted { $0.info.last > $1.info.last }
             .prefix(12))
     }
@@ -47,7 +48,7 @@ struct ChatPanel: View {
         Block(title: "Messages entre agents", note: items.isEmpty ? nil : "\(items.count) message\(items.count > 1 ? "s" : "")") {
             Text("Ce que cette session a échangé avec les autres sessions Claude Code et avec My Claude Code. Ni son terminal, ni les prompts tapés dedans : ils sont dans le miroir ci-dessus.")
                 .font(Theme.sans(11)).foregroundStyle(Theme.inkFaint).fixedSize(horizontal: false, vertical: true)
-            RecipientPicker(selfName: live?.name ?? session.name, others: others, closed: closedSessions,
+            RecipientPicker(selfName: live?.name ?? session.displayName, others: others, closed: closedSessions,
                             recipientID: $recipient,
                             open: $pickerOpen)
 
@@ -113,6 +114,7 @@ struct ChatPanel: View {
         .task(id: session.info.id) {
             // Live refresh: re-read the transcript (only when it changed) every second while the chat is shown.
             while !Task.isCancelled {
+                guard AppActivity.shared.visible else { try? await Task.sleep(for: .seconds(1)); continue }
                 let prompts = Set(center.jobs.map(\.prompt))
                 let id = session.info.id
                 let fresh = await Task.detached(priority: .utility) { ChatLog.items(for: id, appPrompts: prompts) }.value
@@ -171,7 +173,7 @@ struct Bubble: View {
                     .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous)
                         .strokeBorder(mine ? Color.clear : item.role == .peer ? Theme.slate.opacity(0.35) : Theme.rule, lineWidth: 0.5))
                 if let status {
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    TimelineView(.whileShown(1)) { _ in
                         HStack(spacing: 4) {
                             ProgressView().controlSize(.mini)
                             Text("\(Fmt.time(item.date)) · en attente de la réponse · \(Int(status.duration)) s")
@@ -197,7 +199,7 @@ struct PendingBubble: View {
                 Text(job.prompt).font(Theme.sans(13)).foregroundStyle(.white)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(Theme.clay.opacity(job.isRunning ? 0.55 : 0.35)))
-                TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                TimelineView(.whileShown(0.5)) { _ in
                     Text(job.isRunning ? "\(job.stepLabel) \(Int(job.duration)) s" : job.summary)
                         .font(Theme.sans(10)).foregroundStyle(job.isRunning ? Theme.inkFaint : Color.red).lineLimit(2)
                 }
@@ -210,7 +212,7 @@ struct PendingBubble: View {
 struct TypingBubble: View {
     var body: some View {
         HStack {
-            TimelineView(.periodic(from: .now, by: 0.35)) { ctx in
+            TimelineView(.whileShown(0.35)) { ctx in
                 let phase = Int(ctx.date.timeIntervalSinceReferenceDate / 0.35) % 3
                 HStack(spacing: 4) {
                     ForEach(0..<3) { i in

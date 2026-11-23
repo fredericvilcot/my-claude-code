@@ -308,3 +308,25 @@ extension NSTextView {
         didSet { if drawsBackground, isFieldEditor { drawsBackground = false } }
     }
 }
+
+/// A periodic timeline that stops ticking while no window of the app is on screen (hidden panel, no floating
+/// window): hidden views then cost nothing. Reading `AppActivity.visible` here re-renders the view when it changes.
+struct WhileShownSchedule: TimelineSchedule {
+    let interval: TimeInterval
+    let paused: Bool
+    func entries(from startDate: Date, mode: TimelineScheduleMode) -> AnyIterator<Date> {
+        var next: Date? = startDate
+        let step = interval, paused = paused
+        return AnyIterator {
+            guard let date = next else { return nil }
+            next = paused ? nil : date.addingTimeInterval(step)
+            return date
+        }
+    }
+}
+
+extension TimelineSchedule where Self == WhileShownSchedule {
+    static func whileShown(_ interval: TimeInterval) -> WhileShownSchedule {
+        WhileShownSchedule(interval: interval, paused: !AppActivity.shared.visible)
+    }
+}

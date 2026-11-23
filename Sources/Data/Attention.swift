@@ -30,7 +30,7 @@ final class AttentionCenter {
 
     func observe(old: [String: LiveSession], new: [String: LiveSession]) {
         let now = Date()
-        for (id, s) in new where s.kind != "background" && !s.name.hasPrefix("my-claude-code") {
+        for (id, s) in new where !s.name.hasPrefix("my-claude-code") {
             let before = old[id]?.phase
             if s.phase == 0 {
                 if before != 0 { busySince[id] = now }
@@ -119,7 +119,7 @@ final class AttentionCenter {
         var lines = ["\(snap.today.sessions.count) sessions · \(snap.today.messages) réponses · \(Fmt.tokens(snap.today.tokens)) tokens"]
         if !projects.isEmpty { lines.append("Projets : " + projects.sorted().prefix(4).joined(separator: ", ")) }
         if let w = store.plan?.week { lines.append("Semaine à \(Int(w.usedPercent)) %" + (w.exhaustion.map { $0 < w.resetsAt ? ", épuisée \($0.formatted(.dateTime.weekday(.wide).locale(Locale(identifier: "fr_FR")))) à ce rythme" : "" } ?? "")) }
-        let open = store.live.values.filter { $0.kind != "background" && !$0.name.hasPrefix("my-claude-code") }.count
+        let open = store.live.values.filter { !$0.name.hasPrefix("my-claude-code") }.count
         if open > 0 { lines.append("\(open) session\(open > 1 ? "s" : "") encore ouverte\(open > 1 ? "s" : "")") }
         add(AttentionItem(id: "digest-\(now.formatted(.iso8601.year().month().day()))", kind: .digest, sessionID: nil,
                           title: "Bilan de la journée", detail: lines.joined(separator: "\n"), date: now), show: "notify.digest")
@@ -193,18 +193,20 @@ enum SessionLauncher {
     /// Resumes a stopped session in a new tab of iTerm's hotkey window.
     static func openInITerm(_ session: SessionStat, completion: @escaping (String?) -> Void) {
         let dir = session.info.project.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : session.info.project
-        runInHotkeyTab("cd \(shellQuote(dir)) && claude --resume \(session.info.id)", completion: completion)
+        runInHotkeyTab("cd \(shellQuote(dir)) && claude --resume \(shellQuote(session.info.id))", completion: completion)
     }
 
     /// Starts a new interactive Claude Code session in `dir`, with `prompt` as its first message,
     /// in a new tab of iTerm's hotkey window. The prompt goes through a temp file: any quote or newline is safe.
-    static func startProject(in dir: String, prompt: String, completion: @escaping (String?) -> Void) {
+    /// `model`: a Claude model id to start with (e.g. the one of the session being relaunched), else the default.
+    static func startProject(in dir: String, prompt: String, model: String? = nil, completion: @escaping (String?) -> Void) {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("mcc-prompt-\(UUID().uuidString).txt")
         do { try prompt.write(to: file, atomically: true, encoding: .utf8) } catch {
             completion("Impossible de préparer la consigne (\(error.localizedDescription))."); return
         }
         let f = shellQuote(file.path)
-        runInHotkeyTab("cd \(shellQuote(dir)) && claude \"$(cat \(f))\"; rm -f \(f)", completion: completion)
+        let modelArg = model.flatMap { m in m.range(of: "^claude-[a-z0-9.-]+$", options: .regularExpression) != nil ? " --model \(m)" : nil } ?? ""
+        runInHotkeyTab("cd \(shellQuote(dir)) && claude\(modelArg) \"$(cat \(f))\"; rm -f \(f)", completion: completion)
     }
 
     static func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
@@ -240,7 +242,7 @@ enum SessionLauncher {
             return "ok"
         end tell
         """
-        DispatchQueue.global(qos: .userInitiated).async {
+        ITermScript.queue.async {   // the app-wide iTerm queue: NSAppleScript is not thread-safe
             var error: NSDictionary?
             let result = NSAppleScript(source: source)?.executeAndReturnError(&error).stringValue
             let message: String?

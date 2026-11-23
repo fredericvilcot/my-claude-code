@@ -40,7 +40,7 @@ struct StatusView: View {
         let st = store.claude
         return Block(title: "Claude Code", note: st.version.map { "version \($0)" }) {
             VStack(spacing: 0) {
-                row("terminal", "Sessions actives", "\(st.activeSessions)")
+                row("terminal", "Sessions actives", "\(store.live.count)")
                 row("cpu", "Modèle", st.model ?? "—")
                 row("gauge.with.dots.needle.50percent", "Effort", st.effort.map(ContextBlock.effort) ?? "—")
                 row("brain", "Réflexion", st.thinking.map { $0 ? "activée" : "désactivée" } ?? "—")

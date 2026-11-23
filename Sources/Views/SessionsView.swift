@@ -42,7 +42,9 @@ struct SessionsView: View {
     private var list: some View {
         let live = store.live
         let hidden = hiddenSessions
-        let items = store.snapshot.sessions.filter { !hidden.contains($0.info.id) && (live[$0.info.id] != nil || period.contains($0.info.last)) }
+        let items = store.snapshot.sessions.filter {
+            !hidden.contains($0.info.id) && !SessionLineage.isParked($0.info.id) && (live[$0.info.id] != nil || period.contains($0.info.last))
+        }
         // Open sessions by phase (working, waiting, idle), most recent first within each.
         let open = items.filter { live[$0.info.id] != nil }.sorted { $0.info.last > $1.info.last }
         // A session left waiting for over an hour is simply idle (e.g. a background agent that ended its turn days ago).
@@ -143,16 +145,17 @@ struct SessionsView: View {
         return Button { withAnimation(.snappy) { selected = s.index } } label: { SessionCard(session: s, live: live) }
             .buttonStyle(.plain)
             .listRow()
-            .swipeActions(edge: .trailing, allowsFullSwipe: live == nil) {
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(role: .destructive) {
                     withAnimation(.snappy) {
                         if let live { SessionFiles.stop(live) }
                         SessionFiles.delete(s)
                         hiddenSessions = SessionFiles.hidden
                     }
+                    store.refreshAll()
                 } label: { Label("Supprimer", systemImage: "trash") }
                 .tint(.red)
-                if let live, live.pid != nil {
+                if let live {
                     Button {
                         SessionFiles.stop(live)
                         store.refreshAll()
@@ -161,7 +164,7 @@ struct SessionsView: View {
                 }
             }
             .contextMenu {
-                if let live, live.pid != nil {
+                if let live {
                     Button { SessionFiles.stop(live); store.refreshAll() } label: { Label("Arrêter la session", systemImage: "stop.circle") }
                 }
                 Button(role: .destructive) {
@@ -186,7 +189,7 @@ struct SessionCard: View {
         let start = Date(timeIntervalSince1970: session.info.first), end = Date(timeIntervalSince1970: session.info.last)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(session.name).font(Theme.sans(14.5, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
+                Text(store.title(of: session)).font(Theme.sans(14.5, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
                 if let b = session.info.branch, !b.isEmpty, b != "HEAD" {
                     Text(b).font(Theme.sans(11, .medium)).foregroundStyle(Theme.inkSoft).lineLimit(1)
                         .padding(.horizontal, 6).padding(.vertical, 2)
@@ -199,6 +202,7 @@ struct SessionCard: View {
                 HStack(spacing: 5) {
                     Image(systemName: "at").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.clay)
                     Text(live.name).font(.system(size: 11.5, weight: .medium, design: .monospaced)).foregroundStyle(Theme.inkSoft)
+                        .lineLimit(1).truncationMode(.tail)   // background jobs carry long names: never wrap
                 }
             }
             if let live {
@@ -316,7 +320,7 @@ struct SessionDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
 
                 // The session's terminal, mirrored live from its iTerm tab (accordion with the messages below).
-                Block(title: "Terminal", note: store.live[session.info.id]?.pid != nil ? "clic pour taper" : "journal") {
+                Block(title: "Terminal", note: store.live[session.info.id] != nil ? "clic pour taper" : "journal") {
                     TerminalMirrorView(session: session, live: store.live[session.info.id])
                 }
                 .padding(.top, 10)
@@ -330,7 +334,9 @@ struct SessionDetailView: View {
                             .multilineTextAlignment(.trailing)
                     }
                     Bar(fraction: ctx.fraction, color: contextColor(ctx.fraction), height: 9)
-                    if let live = store.live[session.info.id] { CompactButton(session: session, live: live) }
+                    if let live = store.live[session.info.id] {
+                        SessionActions(session: session, live: live, compact: false)
+                    }
                 }
                 Block(title: "Coût", note: Fmt.duration(session.duration)) {
                     Figure(value: Fmt.usd(session.totals.cost.total), size: 40)
@@ -380,7 +386,10 @@ struct SessionDetailView: View {
                                 HStack(spacing: 16) {
                                     Button("annuler") { confirmTrash = false }.buttonStyle(.plain).font(Theme.sans(12)).foregroundStyle(Theme.inkSoft)
                                     Button("supprimer") {
+                                        // Same as the list: a session still running is stopped before its transcript goes.
+                                        if let live = store.live[session.info.id] { SessionFiles.stop(live) }
                                         SessionFiles.delete(session)
+                                        store.refreshAll()
                                         confirmTrash = false
                                         back()
                                     }
@@ -416,11 +425,7 @@ struct SessionDetailView: View {
         }
         .task(id: session.index) {
             AttentionCenter.shared.markSeen(session: session.info.id)
-            var sum = 0.0
-            points = store.records(ofSession: session.index).map { r in
-                sum += Pricing.cost(model: store.modelName(r.m), fast: r.f, input: r.i, output: r.o, write5m: r.w5, write1h: r.w1, read: r.r).total
-                return (Date(timeIntervalSince1970: r.t), sum)
-            }
+            points = await store.costCurve(ofSession: session.index)
         }
     }
 
@@ -441,8 +446,13 @@ struct SessionDetailView: View {
                 .buttonStyle(.plain)
                 .tip("Retour aux sessions")
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(session.name).font(Theme.sans(16, .bold)).foregroundStyle(Theme.ink).lineLimit(1)
-                    Text(session.info.project).font(Theme.sans(10.5)).foregroundStyle(Theme.inkFaint).lineLimit(1).truncationMode(.head)
+                    Text(store.title(of: session)).font(Theme.sans(16, .bold)).foregroundStyle(Theme.ink).lineLimit(1)
+                    if let origin = SessionLineage.origin(of: session.info.id) {
+                        Text("Reprise en arrière-plan de \(origin.name.isEmpty ? "la session d'origine" : origin.name) (onglet iTerm)")
+                            .font(Theme.sans(10.5)).foregroundStyle(Theme.inkFaint).lineLimit(1)
+                    } else {
+                        Text(session.info.project).font(Theme.sans(10.5)).foregroundStyle(Theme.inkFaint).lineLimit(1).truncationMode(.head)
+                    }
                 }
                 Spacer(minLength: 6)
                 if live != nil { FollowButton(sessionID: session.info.id) }
@@ -494,13 +504,13 @@ struct PromptComposer: View {
         let live = store.live[session.info.id]
         let others = store.live.values.filter {
             // Interactive sessions only: no background agents, no My Claude Code relays.
-            $0.sessionId != session.info.id && !$0.name.isEmpty && $0.kind != "background" && !$0.name.hasPrefix("my-claude-code")
+            $0.sessionId != session.info.id && !$0.name.isEmpty && !$0.name.hasPrefix("my-claude-code")
         }.sorted { $0.name < $1.name }
         let recipientID = center.recipients[session.info.id]
         let recipient = recipientID.flatMap { store.live[$0] }
         let text = Binding(get: { center.drafts[session.info.id] ?? "" }, set: { center.drafts[session.info.id] = $0.isEmpty ? nil : $0 })
         Block(title: "Envoyer un prompt", note: recipient != nil || live != nil ? "message direct" : "relance en arrière-plan") {
-            RecipientPicker(selfName: live?.name ?? session.name, others: others,
+            RecipientPicker(selfName: live?.name ?? session.displayName, others: others,
                             recipientID: Binding(get: { center.recipients[session.info.id] }, set: { center.recipients[session.info.id] = $0 }),
                             open: $pickerOpen)
             // Native multi-line field: placeholder and caret share the same origin.
@@ -607,7 +617,7 @@ struct RecipientPicker: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
                         ForEach(closed) { s in
-                            option(id: s.info.id, name: s.name,
+                            option(id: s.info.id, name: s.displayName,
                                    subtitle: [s.info.branch, OverviewView.ago(Date(timeIntervalSince1970: s.info.last))].compactMap { $0 }.joined(separator: " · "),
                                    color: Color.gray)
                         }
@@ -672,7 +682,7 @@ struct HoverRow: ButtonStyle {
 struct SendingCard: View {
     let job: SendJob
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+        TimelineView(.whileShown(0.5)) { _ in
             HStack(alignment: .top, spacing: 10) {
                 ProgressView().controlSize(.small).padding(.top, 1)
                 VStack(alignment: .leading, spacing: 3) {
@@ -759,7 +769,7 @@ struct TerminalLog: View {
     @State private var expanded: Set<String> = []
 
     var body: some View {
-            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+            TimelineView(.whileShown(0.5)) { context in
                 let current = ActivityReader.activity(for: sessionID)
                 let working = live.phase == 0 && (current?.working ?? true)
                 var past = ActivityReader.recent(for: sessionID, limit: limit)

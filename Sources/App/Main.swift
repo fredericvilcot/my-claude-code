@@ -26,6 +26,8 @@ enum MyClaudeCodeMain {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) { UsageStore.shared.flushCache() }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         LimitAlerts.shared.setUp()
         ClaudeCodeLink.refreshScriptIfNeeded()
@@ -48,8 +50,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 7.5) { MiniWindows.shared.capture(prefix: path.replacingOccurrences(of: ".png", with: "")) }
             }
             if CommandLine.arguments.contains("--session-detail") {
+                // `--session <id prefix>` picks the session; default: the most recent one.
+                let wanted = CommandLine.arguments.firstIndex(of: "--session").flatMap { $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1] : nil }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                    if let s = UsageStore.shared.snapshot.current { NotificationCenter.default.post(name: .openSession, object: s.index) }
+                    let store = UsageStore.shared
+                    let s = wanted.flatMap { w in store.snapshot.sessions.first { $0.info.id.hasPrefix(w) } } ?? store.snapshot.current
+                    if let s { NotificationCenter.default.post(name: .openSession, object: s.index) }
                 }
             }
             if CommandLine.arguments.contains("--notifications") {
@@ -147,6 +153,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
                     view.cacheDisplay(in: view.bounds, to: rep)
                     print(String(format: "rendu %d : %.0f ms", run, Date().timeIntervalSince(start) * 1000))
+                }
+                // Each tab alone, twice (first render, then a re-render as on a data refresh).
+                let tabs: [(String, AnyView)] = [("Direct", AnyView(LiveView())), ("Sessions", AnyView(SessionsView(selected: .constant(nil)))),
+                                                 ("Stats", AnyView(StatsView())), ("Statut", AnyView(StatusView())), ("Réglages", AnyView(SettingsView()))]
+                for (name, root) in tabs {
+                    for pass in 1...2 {
+                        let start = Date()
+                        let view = NSHostingView(rootView: root.environment(UsageStore.shared))
+                        view.sizingOptions = []
+                        view.frame = NSRect(x: 0, y: 0, width: 400, height: 700)
+                        view.layoutSubtreeIfNeeded()
+                        let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+                        view.cacheDisplay(in: view.bounds, to: rep)
+                        print(String(format: "onglet %@ (%d) : %.0f ms", name, pass, Date().timeIntervalSince(start) * 1000))
+                    }
                 }
                 let fm = Date()
                 for _ in 0..<20 { _ = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) }

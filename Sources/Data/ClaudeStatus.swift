@@ -25,7 +25,6 @@ struct ClaudeStatus {
     var plugins = 0
     var claudeMdBytes = 0
     var memories = 0
-    var activeSessions = 0
 
     static func load() -> ClaudeStatus {
         var s = ClaudeStatus()
@@ -88,10 +87,6 @@ struct ClaudeStatus {
             total + count("\(home)/.claude/projects/\(dir)/memory", ext: ".md")
         } ?? 0
 
-        // Running Claude Code sessions (CLI processes).
-        if let out = Shell.run("/bin/ps", ["-axo", "comm="]) {
-            s.activeSessions = out.split(separator: "\n").filter { $0.contains("/.local/share/claude/versions/") || $0.hasSuffix("/claude") }.count
-        }
         return s
     }
 }
