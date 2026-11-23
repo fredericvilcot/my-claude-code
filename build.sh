@@ -4,8 +4,16 @@ set -euo pipefail
 cd "$(dirname "$0")"
 APP="build/My Claude Code.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" build/tmp
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" build/tmp build/swiftterm
+# SwiftTerm (vendored terminal emulator) is its own module, built once and rebuilt only when its sources change.
+ST=build/swiftterm
+if [[ ! -f $ST/libSwiftTerm.a || -n $(find Vendor/SwiftTerm/Sources -newer $ST/libSwiftTerm.a -name '*.swift' | head -1) ]]; then
+  swiftc -O -parse-as-library -target arm64-apple-macos14.0 -module-name SwiftTerm \
+    -emit-module -emit-module-path $ST/SwiftTerm.swiftmodule -emit-library -static -o $ST/libSwiftTerm.a \
+    Vendor/SwiftTerm/Sources/**/*.swift
+fi
 swiftc -O -parse-as-library -target arm64-apple-macos14.0 \
+  -I $ST -L $ST -lSwiftTerm \
   -framework AppKit -framework SwiftUI -framework Charts -framework ServiceManagement -framework Speech -framework AVFoundation \
   Sources/**/*.swift -o "$APP/Contents/MacOS/MyClaudeCode"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
