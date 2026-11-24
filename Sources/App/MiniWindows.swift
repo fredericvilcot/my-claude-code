@@ -178,7 +178,8 @@ struct MiniWindowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            titleBar
+            // Always on screen (drag, ✕), whatever the content below asks for.
+            titleBar.layoutPriority(1)
             Group {
                 switch kind {
                 case .quotas:
@@ -200,7 +201,9 @@ struct MiniWindowView: View {
                     SessionFollowView(sessionID: id)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            // Exactly the room left under the title bar: taller content is clipped here instead of pushing the bar
+            // off the top of the window.
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
             .clipped()
         }
         .background(Theme.paper.opacity(0.92))
@@ -261,12 +264,26 @@ struct MiniWindowView: View {
 @MainActor
 struct SessionFollowView: View {
     @Environment(UsageStore.self) private var store
+    @AppStorage("openedBlocks") private var openedRaw = ""
     let sessionID: String
 
+    /// The two cards are an accordion: with the terminal open it fills the window; with the messages open the content
+    /// has a fixed height, so it scrolls (the window's title bar stays put).
+    private var chatOpen: Bool { openedRaw.split(separator: " ").contains("mini.Messages_entre_agents") }
+
     var body: some View {
+        if chatOpen {
+            ScrollView { content.frame(maxWidth: .infinity, alignment: .top) }
+                .scrollIndicators(.automatic)
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         let session = store.snapshot.sessions.first { $0.info.id == sessionID }
         let live = store.live[sessionID]
-        VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 12) {
             if let session {
                 let ctx = store.context(of: session)
                 Text([Fmt.model(session.lastModel), "\(session.totals.messages) réponses", Fmt.usd(session.totals.cost.total),
@@ -289,7 +306,7 @@ struct SessionFollowView: View {
                     ChatPanel(session: session, listHeight: 260)
                 }
                 .environment(\.blockFold, "mini")
-                .frame(maxHeight: .infinity, alignment: .top)
+                .frame(maxHeight: chatOpen ? nil : .infinity, alignment: .top)
             } else {
                 Text("Session introuvable.").font(Theme.sans(12)).foregroundStyle(Theme.inkSoft)
             }
