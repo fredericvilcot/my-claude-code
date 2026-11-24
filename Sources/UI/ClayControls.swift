@@ -152,6 +152,9 @@ struct ClayTextEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ClayTextEditor
+        /// The keyboard was already asked for since `focused` last became true: asked once, never again on later
+        /// updates (otherwise every refresh of the view would take the keyboard back from wherever the user went).
+        var focusRequested = false
         init(_ parent: ClayTextEditor) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
@@ -199,15 +202,34 @@ struct ClayTextEditor: NSViewRepresentable {
             tv.string = text
             tv.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
         }
-        if focused?.wrappedValue == true, let window = tv.window, window.firstResponder !== tv {
-            DispatchQueue.main.async { window.makeKey(); window.makeFirstResponder(tv) }
+        // Takes the keyboard once when `focused` turns true (or when shown with it true), on the next turn, once the
+        // field is in its window.
+        if focused?.wrappedValue == true {
+            if !context.coordinator.focusRequested, tv.window != nil {
+                context.coordinator.focusRequested = true
+                DispatchQueue.main.async { [weak tv] in
+                    guard let tv, let window = tv.window, window.firstResponder !== tv else { return }
+                    window.makeKey()
+                    window.makeFirstResponder(tv)
+                }
+            }
+        } else {
+            context.coordinator.focusRequested = false
         }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
         let width = max(40, proposal.width ?? 240)
-        guard let tv = scroll.documentView as? NSTextView, let layout = tv.layoutManager, let container = tv.textContainer else { return nil }
-        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        guard let tv = scroll.documentView as? NSTextView else { return nil }
+        // Measured on a copy of the text, never on the text view itself: SwiftUI asks with several trial widths, and
+        // setting them on the live container left its layout for the wrong width, redone while drawing, which AppKit
+        // rejects with an exception (crash in the menu bar menu with a long draft, or when the field was cleared).
+        let storage = NSTextStorage(string: tv.string, attributes: [.font: Self.font])
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
         layout.ensureLayout(for: container)
         let line = layout.defaultLineHeight(for: Self.font)
         let used = max(layout.usedRect(for: container).height, line)
