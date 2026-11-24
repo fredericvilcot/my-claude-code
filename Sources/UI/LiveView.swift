@@ -11,7 +11,7 @@ struct LiveView: View {
         return store.snapshot.sessions
             .filter { s in
                 guard let l = store.live[s.info.id] else { return false }
-                return !hidden.contains(s.info.id) && !l.name.hasPrefix("my-claude-code")
+                return !hidden.contains(s.info.id) && l.isUserSession
             }
             .sorted { a, b in
                 let pa = store.live[a.info.id]?.phase ?? 3, pb = store.live[b.info.id]?.phase ?? 3

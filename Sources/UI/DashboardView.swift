@@ -202,7 +202,7 @@ struct DashboardView: View {
     }
 
     private var busyCount: Int {
-        store.live.values.filter { $0.phase == 0 && !$0.name.hasPrefix("my-claude-code") }.count
+        store.live.values.filter { $0.phase == 0 && $0.isUserSession }.count
     }
 
     /// Green while a session is open, grey otherwise.
@@ -219,7 +219,7 @@ struct DashboardView: View {
     }
 
     private var activeCount: Int {
-        store.live.values.filter { !$0.name.hasPrefix("my-claude-code") }.count
+        store.live.values.filter(\.isUserSession).count
     }
 
     private var planLine: String {

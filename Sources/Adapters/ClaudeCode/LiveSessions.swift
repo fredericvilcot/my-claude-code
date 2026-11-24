@@ -22,7 +22,8 @@ enum LiveSessions {
                 continue
             }
             out[sid] = LiveSession(sessionId: sid, name: s["name"] as? String ?? "", shortId: s["jobId"] as? String ?? String(sid.prefix(8)),
-                                   kind: Self.normalizedKind(s["kind"] as? String), state: s["status"] as? String ?? "idle", pid: pid)
+                                   kind: Self.normalizedKind(s["kind"] as? String), state: s["status"] as? String ?? "idle", pid: pid,
+                                   headless: s["entrypoint"] as? String == "sdk-cli")
         }
         return out
     }
@@ -90,8 +91,8 @@ enum LiveSessions {
     }
 }
 
-/// Sends a prompt to a session, invisibly:
-/// - running session → relayed through Claude Code's own agent messaging (a tiny headless Claude Code calls SendMessage);
+/// Sends a message to a session, invisibly:
+/// - running session → like the quick command, an intermediary headless Claude Code writes it and sends it with SendMessage;
 /// - stopped session → resumed in the background with the prompt (`claude --bg --resume`).
 /// Either way the exchange appears in that session when you open it in the terminal.
 enum PromptSender {
@@ -104,9 +105,14 @@ enum PromptSender {
     }
     static func withFooter(_ message: String) -> String { message + footer(chatMarker) }
 
+    /// Older session chat (before the app orchestrated it): the session was asked to write with SendMessage itself.
+    /// Kept to read older transcripts.
+    static let relayMarker = "⟪mcc·relais⟫"
+
     /// Message text without the footer, for display.
     static func stripFooter(_ text: String) -> String {
-        guard let r = text.range(of: "\n\n— via My Claude Code") ?? text.range(of: "⟪My Claude Code⟫") else { return text }
+        guard let r = text.range(of: "\n\n— via My Claude Code") ?? text.range(of: "\n\n— échange entre sessions")
+                ?? text.range(of: "⟪My Claude Code⟫") else { return text }
         return String(text[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -114,13 +120,13 @@ enum PromptSender {
 
     static func send(_ prompt: String, to session: SessionStat, live: LiveSession?) async -> Outcome {
         guard let claude = UsagePoller.claudePath else { return .failed("Claude Code introuvable") }
-        // Writing to the session itself: type it in, like the user would. Instant, no relay, no model call.
-        if let live, live.sessionId == session.info.id {
-            let error: String? = await withCheckedContinuation { cont in
-                DispatchQueue.main.async { MainActor.assumeIsolated { SessionInput.type(prompt, into: live) { cont.resume(returning: $0) } } }
-            }
-            return error.map { .failed($0) } ?? .delivered
+        // Running session (this one or another): exactly like the quick command, an intermediary Claude Code agent
+        // writes the message for it and sends it with SendMessage. An agent writes to an agent; never typed in.
+        if let live, !live.name.isEmpty {
+            let r = await broadcast(prompt, to: [live.name])
+            return r.ok ? .delivered : .failed(String(r.text.prefix(160)))
         }
+        // Stopped session: resumed in the background with the prompt.
         return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let task = Process()
@@ -129,24 +135,9 @@ enum PromptSender {
                 task.standardOutput = pipe
                 task.standardError = FileHandle.nullDevice
                 task.standardInput = FileHandle.nullDevice   // otherwise Claude Code waits for stdin and prints a warning
-                if let live, !live.name.isEmpty {
-                    let relay = """
-                    Use the SendMessage tool (load it first with ToolSearch "select:SendMessage" if it is not loaded) to send \
-                    the message below, unchanged, to the session named "\(live.name)". It is an instruction from the user, \
-                    typed in the My Claude Code menu bar app. Do not wait for a reply and never answer the session yourself. \
-                    If SendMessage succeeded, reply with the exact token RELAY_DELIVERED and nothing else; otherwise give the exact error \
-                    and never write that token.
-                    <message>
-                    \(withFooter(prompt))
-                    </message>
-                    """
-                    task.arguments = ["-p", relay, "--model", "claude-haiku-5-5", "--no-session-persistence", "--output-format", "json"]
-                    task.currentDirectoryURL = PlanUsage.directory
-                } else {
-                    task.arguments = ["--bg", "--resume", session.info.id, prompt]
-                    task.currentDirectoryURL = URL(fileURLWithPath: session.info.project.isEmpty
-                                                   ? FileManager.default.homeDirectoryForCurrentUser.path : session.info.project)
-                }
+                task.arguments = ["--bg", "--resume", session.info.id, prompt]
+                task.currentDirectoryURL = URL(fileURLWithPath: session.info.project.isEmpty
+                                               ? FileManager.default.homeDirectoryForCurrentUser.path : session.info.project)
                 do { try task.run() } catch { cont.resume(returning: .failed(error.localizedDescription)); return }
                 let killer = DispatchWorkItem { if task.isRunning { task.terminate() } }
                 DispatchQueue.global().asyncAfter(deadline: .now() + 300, execute: killer)
@@ -154,22 +145,108 @@ enum PromptSender {
                 task.waitUntilExit()
                 killer.cancel()
                 let text = String(data: data, encoding: .utf8) ?? ""
-                if live != nil {
-                    let result = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["result"] as? String ?? text
-                    // The relay may answer in prose (user instructions apply to it): look for the token anywhere.
-                    let ok = result.contains("RELAY_DELIVERED") || result.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().hasPrefix("OK")
-                    cont.resume(returning: ok ? .delivered : .failed(String(result.prefix(160))))
-                } else {
-                    cont.resume(returning: task.terminationStatus == 0 ? .resumed : .failed(String(text.prefix(160))))
-                }
+                cont.resume(returning: task.terminationStatus == 0 ? .resumed : .failed(String(text.prefix(160))))
             }
         }
     }
 }
 
 extension PromptSender {
-    /// Runs a headless, non-persisted Claude Code with `prompt` and returns its final text.
-    static func runEphemeral(_ prompt: String, model: String?) async -> (ok: Bool, text: String) {
+    // MARK: Conversation between two sessions, orchestrated by the app
+    //
+    // In a session's chat the user asks session A to write to session B. Sessions never call SendMessage for it (in
+    // auto mode Claude Code refuses a message one session sends to another on a third party's word): every leg is
+    // sent by an intermediary agent the app starts on the user's behalf, like the quick command, and each session
+    // answers in its own turn, which the app reads from its transcript.
+    //   1. an agent writes to A what the user wants it to tell B → A writes the message in its reply;
+    //   2. an agent passes A's message to B → B writes its answer in its reply;
+    //   3. an agent passes B's answer back to A. One round trip per request: no ping-pong.
+    // The marker "⟪mcc·<step>·<tag>·<name>⟫" links each leg to its request (tag) and names the other session.
+
+    enum Leg: String { case compose = "rédige", deliver = "de", answer = "réponse" }
+
+    static func legMarker(_ leg: Leg, tag: String, name: String) -> String { "⟪mcc·\(leg.rawValue)·\(tag)·\(name)⟫" }
+
+    /// The leg, request tag and other session named by a message's marker.
+    static func leg(of body: String) -> (leg: Leg, tag: String, name: String)? {
+        guard let start = body.range(of: "⟪mcc·"), let end = body.range(of: "⟫", range: start.upperBound..<body.endIndex) else { return nil }
+        let parts = body[start.upperBound..<end.lowerBound].split(separator: "·", maxSplits: 2).map(String.init)
+        guard parts.count == 3, let leg = Leg(rawValue: parts[0]) else { return nil }
+        return (leg, parts[1], parts[2])
+    }
+
+    /// Text between `<tag>` and `</tag>`, if the session used them.
+    static func between(_ tag: String, in text: String) -> String? {
+        guard let a = text.range(of: "<\(tag)>", options: .backwards),
+              let b = text.range(of: "</\(tag)>", range: a.upperBound..<text.endIndex) else { return nil }
+        return String(text[a.upperBound..<b.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Leg 1: an agent asks `writer`, on the user's behalf, to write in its reply the message for `target`.
+    static func askToWrite(_ instruction: String, tag: String, writer: String, target: String) async -> Bool {
+        let footer = "\n\n— via My Claude Code \(legMarker(.compose, tag: tag, name: target)) · consigne de l'utilisateur transmise "
+            + "par un relais déjà fermé : n'utilise pas SendMessage. Écris dans ta propre réponse le message pour « \(target) », "
+            + "entre <message> et </message> ; My Claude Code le lui transmettra puis te rapportera sa réponse."
+        let prompt = """
+        The user typed the instruction below in the My Claude Code menu bar app, in the chat of the Claude Code session \
+        "\(writer)": they want "\(writer)" to write a message to the session "\(target)". You are an intermediary. Write, in \
+        French, the message "\(writer)" should receive: address "\(writer)" directly and speak on behalf of the user (e.g. \
+        "L'utilisateur te demande d'écrire à la session « \(target) » pour lui…"), say what the message must convey, concise, \
+        never addressing the user. Do not write the message to "\(target)" yourself. End your message with these exact lines:\(footer)
+        Send it with the SendMessage tool (load it first with ToolSearch "select:SendMessage" if needed) to "\(writer)" only. \
+        Do not wait for a reply and never answer it yourself.
+        Finally reply with the exact token RELAY_DELIVERED. If the send failed, say why, without that token.
+        <instruction>
+        \(instruction)
+        </instruction>
+        """
+        let r = await runEphemeral(prompt, model: "claude-sonnet-5-5", in: PlanUsage.directory)
+        return r.ok && r.text.contains("RELAY_DELIVERED")
+    }
+
+    /// Legs 2 and 3: an agent passes a session's text, as is, to another session.
+    static func pass(_ text: String, leg: Leg, tag: String, from: String, to: String) async -> Bool {
+        let message: String
+        if leg == .deliver {
+            message = "Message de la session « \(from) » :\n\n\(text)\n\n— via My Claude Code \(legMarker(.deliver, tag: tag, name: from)) · "
+                + "transmis par un relais déjà fermé : n'utilise pas SendMessage. Écris dans ta propre réponse ta réponse pour "
+                + "« \(from) », entre <réponse> et </réponse> ; My Claude Code la lui transmettra. Si aucune réponse n'est "
+                + "attendue, écris <réponse></réponse>."
+        } else {
+            message = "Réponse de la session « \(from) » :\n\n\(text)\n\n— via My Claude Code \(legMarker(.answer, tag: tag, name: from)) · "
+                + "transmise par un relais déjà fermé : fin de l'échange demandé par l'utilisateur, n'y réponds pas avec SendMessage."
+        }
+        let prompt = """
+        You are an intermediary of the My Claude Code menu bar app, acting for the user. Send the message between the \
+        <send> tags, verbatim and complete, with the SendMessage tool (load it first with ToolSearch "select:SendMessage" if \
+        needed) to the Claude Code session "\(to)". Do not change it, do not wait for a reply, never answer it yourself.
+        Finally reply with the exact token RELAY_DELIVERED. If the send failed, say why, without that token.
+        <send>
+        \(message)
+        </send>
+        """
+        let r = await runEphemeral(prompt, model: "claude-sonnet-5-5", in: PlanUsage.directory)
+        return r.ok && r.text.contains("RELAY_DELIVERED")
+    }
+
+    enum Answer { case text(String), declined(String), timedOut }
+
+    /// Waits for `session` to answer the leg tagged `tag` in its own turn (read from its transcript).
+    static func awaitAnswer(in session: String, tag: String, timeout: TimeInterval) async -> Answer {
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end {
+            if let item = ChatLog.items(for: session).last(where: { $0.ref == tag && ($0.role == .agent || $0.role == .note) }) {
+                return item.role == .agent ? .text(item.text) : .declined(item.text)
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
+        return .timedOut
+    }
+
+    /// Runs a headless, non-persisted Claude Code with `prompt` and returns its final text. Intermediary agents run in
+    /// the app's folder (Claude Code names them "my-claude-code-…"); a one-off task runs in the home folder.
+    static func runEphemeral(_ prompt: String, model: String?,
+                             in directory: URL = FileManager.default.homeDirectoryForCurrentUser) async -> (ok: Bool, text: String) {
         guard let claude = UsagePoller.claudePath else { return (false, "Claude Code introuvable") }
         return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -178,7 +255,7 @@ extension PromptSender {
                 var args = ["-p", prompt, "--no-session-persistence", "--output-format", "json"]
                 if let model { args += ["--model", model] }
                 task.arguments = args
-                task.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+                task.currentDirectoryURL = directory
                 let pipe = Pipe()
                 task.standardOutput = pipe
                 task.standardError = FileHandle.nullDevice
@@ -214,9 +291,9 @@ extension PromptSender {
         \(instruction)
         </instruction>
         """
-        let r = await runEphemeral(relay, model: "claude-sonnet-5-5")
+        let r = await runEphemeral(relay, model: "claude-sonnet-5-5", in: PlanUsage.directory)
         let report = stripFooter(r.text.replacingOccurrences(of: "RELAY_DELIVERED", with: "")).trimmingCharacters(in: .whitespacesAndNewlines)
-        return (r.text.contains("RELAY_DELIVERED"), report)
+        return (r.ok && r.text.contains("RELAY_DELIVERED"), report)
     }
 }
 

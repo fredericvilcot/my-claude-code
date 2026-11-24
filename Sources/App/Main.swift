@@ -130,7 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 say("sessions vues : \(live.values.map(\.name))")
                 // Target: the session named by --diag-target, else the first interactive one.
                 let wanted = CommandLine.arguments.firstIndex(of: "--diag-target").flatMap { $0 + 1 < CommandLine.arguments.count ? CommandLine.arguments[$0 + 1] : nil }
-                guard let target = live.values.first(where: { wanted.map($0.name.hasPrefix) ?? ($0.kind == "interactive" && !$0.name.hasPrefix("my-claude-code")) })
+                guard let target = live.values.first(where: { wanted.map($0.name.hasPrefix) ?? ($0.kind == "interactive" && $0.isUserSession) })
                 else { say("cible absente"); exit(1) }
                 let stat = SessionStat(index: 0, info: SessionInfo(id: target.sessionId, project: "", branch: nil, first: 0, last: 0))
                 let t0 = Date()
@@ -212,8 +212,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let files = UsageLog.listFiles().map(\.path).filter { ($0 as NSString).lastPathComponent.hasPrefix(prefix) }
                 guard let path = files.first else { print("journal introuvable"); exit(1) }
                 let id = String((path as NSString).lastPathComponent.dropLast(6))
-                for item in ChatLog.items(for: id, appPrompts: []) {
-                    let who = item.role == .agent ? "→ réponse" : "← \(item.from)"
+                for item in ChatLog.items(for: id) {
+                    let who = "\(item.role) \(item.from) → \(item.to) [\(item.delivery)]"
                     print("\(who) : \(item.text.replacingOccurrences(of: "\n", with: " ").prefix(110))")
                 }
                 exit(0)

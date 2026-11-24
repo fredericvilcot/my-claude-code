@@ -495,80 +495,6 @@ struct SessionDetailView: View {
     }
 }
 
-/// Type or dictate a prompt and send it to this session, invisibly (see PromptSender).
-@MainActor
-struct PromptComposer: View {
-    @Environment(UsageStore.self) private var store
-    let session: SessionStat
-    @State private var center = SendCenter.shared
-    @State private var dictation = Dictation()
-    @State private var pickerOpen = false
-
-    var body: some View {
-        let live = store.live[session.info.id]
-        let others = store.live.values.filter {
-            // Interactive sessions only: no background agents, no My Claude Code relays.
-            $0.sessionId != session.info.id && !$0.name.isEmpty && !$0.name.hasPrefix("my-claude-code")
-        }.sorted { $0.name < $1.name }
-        let recipientID = center.recipients[session.info.id]
-        let recipient = recipientID.flatMap { store.live[$0] }
-        let text = Binding(get: { center.drafts[session.info.id] ?? "" }, set: { center.drafts[session.info.id] = $0.isEmpty ? nil : $0 })
-        Block(title: "Envoyer un prompt", note: recipient != nil || live != nil ? "message direct" : "relance en arrière-plan") {
-            RecipientPicker(selfName: live?.name ?? session.displayName, others: others,
-                            recipientID: Binding(get: { center.recipients[session.info.id] }, set: { center.recipients[session.info.id] = $0 }),
-                            open: $pickerOpen)
-            ClayTextField(text: text, placeholder: dictation.isRecording ? "Je vous écoute…" : "Votre instruction pour cette session…",
-                          minLines: 3, maxLines: 8, onSubmit: { send(text.wrappedValue, live: recipient ?? live) })
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.paper))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(dictation.isRecording ? Color.red.opacity(0.6) : Theme.rule, lineWidth: dictation.isRecording ? 1.5 : 0.5))
-            HStack(spacing: 10) {
-                Button { dictation.toggle() } label: {
-                    Image(systemName: dictation.isRecording ? "stop.circle.fill" : "mic.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(dictation.isRecording ? Color.red : Theme.clay)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill((dictation.isRecording ? Color.red : Theme.clay).opacity(0.13)))
-                }
-                .buttonStyle(.plain)
-                .tip(dictation.isRecording ? "Arrêter la dictée" : "Dicter le prompt")
-                Spacer()
-                Button { send(text.wrappedValue, live: recipient ?? live) } label: {
-                    HStack(spacing: 6) {
-                        Text("Envoyer").font(Theme.sans(13, .semibold))
-                        Image(systemName: "paperplane.fill").font(.system(size: 11))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(Capsule().fill(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.inkFaint : Theme.clay))
-                }
-                .buttonStyle(.plain)
-                .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            if let error = dictation.error {
-                Text(error).font(Theme.sans(11.5)).foregroundStyle(.orange)
-            }
-            let jobs = center.jobs(for: session.info.id)
-            let done = jobs.filter { !$0.isRunning }.prefix(10)
-            if !done.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Historique des envois").font(Theme.sans(12, .semibold)).foregroundStyle(Theme.inkSoft).padding(.top, 4)
-                    ForEach(Array(done)) { job in SentRow(job: job) }
-                }
-            }
-        }
-        .onChange(of: dictation.transcript) { _, t in if dictation.isRecording { center.drafts[session.info.id] = t } }
-    }
-
-    private func send(_ prompt: String, live: LiveSession?) {
-        dictation.stop()
-        let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !p.isEmpty else { return }
-        center.send(p, from: session, to: live)
-    }
-}
-
 /// Custom recipient selector: a chip showing who receives the prompt, unfolding into a list of running sessions.
 struct RecipientPicker: View {
     @Environment(UsageStore.self) private var store
@@ -576,6 +502,8 @@ struct RecipientPicker: View {
     let others: [LiveSession]
     /// Recent closed sessions: writing to one relaunches it in the background with its history.
     var closed: [SessionStat] = []
+    /// False in a session's chat: a session writes to other sessions only (to itself, use its terminal).
+    var includeSelf = true
     @Binding var recipientID: String?
     @Binding var open: Bool
 
@@ -586,7 +514,7 @@ struct RecipientPicker: View {
                 HStack(spacing: 8) {
                     Text("À").font(Theme.sans(12)).foregroundStyle(Theme.inkSoft)
                     Circle().fill(current.map(Self.color) ?? Theme.clay).frame(width: 7, height: 7)
-                    Text(current?.name ?? "\(selfName) (cette session)")
+                    Text(current?.name ?? (includeSelf ? "\(selfName) (cette session)" : others.isEmpty ? "aucune autre session ouverte" : "choisir une session…"))
                         .font(.system(size: 12.5, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.ink).lineLimit(1)
                     Spacer(minLength: 6)
                     if !others.isEmpty || !closed.isEmpty {
@@ -604,9 +532,9 @@ struct RecipientPicker: View {
 
             if open {
                 VStack(spacing: 0) {
-                    option(id: nil, name: "\(selfName)", subtitle: "cette session", color: Theme.clay)
-                    ForEach(others, id: \.sessionId) { o in
-                        Rectangle().fill(Theme.rule).frame(height: 0.5).padding(.leading, 34)
+                    if includeSelf { option(id: nil, name: "\(selfName)", subtitle: "cette session", color: Theme.clay) }
+                    ForEach(Array(others.enumerated()), id: \.element.sessionId) { i, o in
+                        if includeSelf || i > 0 { Rectangle().fill(Theme.rule).frame(height: 0.5).padding(.leading, 34) }
                         option(id: o.sessionId, name: o.name, subtitle: subtitle(o), color: Self.color(o))
                     }
                     if !closed.isEmpty {

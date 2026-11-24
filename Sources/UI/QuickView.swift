@@ -20,7 +20,7 @@ struct QuickView: View {
     @AppStorage("quickTarget") private var target = "eph"
 
     private var sessions: [LiveSession] {
-        store.live.values.filter { !$0.name.isEmpty && !$0.name.hasPrefix("my-claude-code") }
+        store.live.values.filter { !$0.name.isEmpty && $0.isUserSession }
             .sorted { $0.name < $1.name }
     }
 
