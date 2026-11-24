@@ -10,7 +10,7 @@ enum MyClaudeCodeMain {
     static func main() {
         UserDefaults.standard.register(defaults: ["refreshInterval": 15.0, "menuBarStyle": "both",
                                                   "alertThreshold": 70.0, "usagePollInterval": 60.0, "notify.finished": true, "notify.waiting": true,
-                                                  "notify.context": true, "notify.quota": true, "notify.digest": true])
+                                                  "notify.context": true, "notify.quota": true, "notify.reset": true, "notify.digest": true])
         if CommandLine.arguments.contains("--dump") {
             let c = UsageCache()
             _ = c

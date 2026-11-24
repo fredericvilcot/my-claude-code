@@ -3,7 +3,7 @@ import Observation
 
 /// Something that needs the user: a session finished or waiting, a context about to compact, a quota at risk.
 struct AttentionItem: Identifiable, Equatable {
-    enum Kind: Int { case waiting, finished, context, quota, digest }
+    enum Kind: Int { case waiting, finished, context, quota, reset, digest }
     let id: String
     let kind: Kind
     let sessionID: String?
@@ -30,7 +30,7 @@ final class AttentionCenter {
 
     func observe(old: [String: LiveSession], new: [String: LiveSession]) {
         let now = Date()
-        for (id, s) in new where !s.name.hasPrefix("my-claude-code") {
+        for (id, s) in new where s.isUserSession {
             let before = old[id]?.phase
             if s.phase == 0 {
                 if before != 0 { busySince[id] = now }
@@ -93,6 +93,46 @@ final class AttentionCenter {
             _ = (isNew, over)   // the panel never opens by itself: the menu bar count tells
         }
         remove { $0.id.hasPrefix("limit-") && !current.contains($0.id) }
+        trackResets(plan)
+    }
+
+    // MARK: Resets
+
+    /// Reset time of each known quota window (by short name), persisted so a reset is told even after a restart.
+    @ObservationIgnored private var windowResets: [String: Double] =
+        UserDefaults.standard.dictionary(forKey: "reset.windows") as? [String: Double] ?? [:]
+
+    /// Remembers each window's reset time; a window that moved on to a later reset has been reset.
+    private func trackResets(_ plan: PlanUsage) {
+        for w in plan.all {
+            let at = w.resetsAt.timeIntervalSince1970
+            if let known = windowResets[w.shortName], at - known > 600 { announceReset(w.shortName, at: Date(timeIntervalSince1970: known)) }
+            windowResets[w.shortName] = at
+        }
+        UserDefaults.standard.set(windowResets, forKey: "reset.windows")
+    }
+
+    /// Every minute: windows whose reset time has passed, even with no session running to refresh the figures.
+    private func checkResets() {
+        let now = Date().timeIntervalSince1970
+        for (name, at) in windowResets where at <= now { announceReset(name, at: Date(timeIntervalSince1970: at)) }
+    }
+
+    /// One item per reset, once (a reset long past, e.g. while the app was closed for days, is not told).
+    private func announceReset(_ name: String, at date: Date) {
+        let key = "reset-\(name)-\(Int(date.timeIntervalSince1970 / 60))"
+        let d = UserDefaults.standard
+        var told = d.stringArray(forKey: "reset.told") ?? []
+        guard !told.contains(key) else { return }
+        told.append(key)
+        d.set(Array(told.suffix(50)), forKey: "reset.told")
+        guard Date().timeIntervalSince(date) < 12 * 3600 else { return }
+        let title = name == "Session" ? "Session réinitialisée" : name == "Semaine" ? "Semaine réinitialisée" : "Quota \(name) réinitialisé"
+        let span = name == "Session" ? "les 5 prochaines heures" : "les 7 prochains jours"
+        remove { $0.kind == .quota && $0.id.hasPrefix("limit-\(name)-") }
+        add(AttentionItem(id: key, kind: .reset, sessionID: nil, title: title,
+                          detail: "à \(Fmt.time(date)) · limite remise à 0 % pour \(span)", date: date),
+            show: "notify.reset")
     }
 
     // MARK: Evening digest
@@ -104,6 +144,7 @@ final class AttentionCenter {
     }
 
     private func checkDigest() {
+        checkResets()
         remove { $0.kind == .digest && !Calendar.current.isDateInToday($0.date) }
         guard Self.enabled("notify.digest") else { return }
         let d = UserDefaults.standard
@@ -117,7 +158,7 @@ final class AttentionCenter {
         var lines = ["\(snap.today.sessions.count) sessions · \(snap.today.messages) réponses · \(Fmt.tokens(snap.today.tokens)) tokens"]
         if !projects.isEmpty { lines.append("Projets : " + projects.sorted().prefix(4).joined(separator: ", ")) }
         if let w = store.plan?.week { lines.append("Semaine à \(Int(w.usedPercent)) %" + (w.exhaustion.map { $0 < w.resetsAt ? ", épuisée \($0.formatted(.dateTime.weekday(.wide).locale(Locale(identifier: "fr_FR")))) à ce rythme" : "" } ?? "")) }
-        let open = store.live.values.filter { !$0.name.hasPrefix("my-claude-code") }.count
+        let open = store.live.values.filter(\.isUserSession).count
         if open > 0 { lines.append("\(open) session\(open > 1 ? "s" : "") encore ouverte\(open > 1 ? "s" : "")") }
         add(AttentionItem(id: "digest-\(now.formatted(.iso8601.year().month().day()))", kind: .digest, sessionID: nil,
                           title: "Bilan de la journée", detail: lines.joined(separator: "\n"), date: now), show: "notify.digest")

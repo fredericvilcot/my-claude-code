@@ -160,6 +160,7 @@ struct NotificationRow: View {
         case .finished: ("checkmark", .green)
         case .context: ("rectangle.compress.vertical", .orange)
         case .quota: ("chart.line.downtrend.xyaxis", .red)
+        case .reset: ("arrow.counterclockwise.circle.fill", .green)
         case .digest: ("moon.stars.fill", .indigo)
         }
     }

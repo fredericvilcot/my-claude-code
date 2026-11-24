@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("notify.waiting") private var nWaiting = true
     @AppStorage("notify.context") private var nContext = true
     @AppStorage("notify.quota") private var nQuota = true
+    @AppStorage("notify.reset") private var nReset = true
     @AppStorage("notify.digest") private var nDigest = true
     @AppStorage("digest.hour") private var digestHour = 18
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -40,6 +41,7 @@ struct SettingsView: View {
                 Toggle("Une session attend votre réponse", isOn: $nWaiting)
                 Toggle("Contexte proche de la compaction (85 %)", isOn: $nContext)
                 Toggle("Limites du forfait (seuil et rythme d’épuisement)", isOn: $nQuota)
+                Toggle("Réinitialisation des limites (session, semaine, modèles)", isOn: $nReset)
                 Toggle("Bilan de la journée", isOn: $nDigest)
                 if nDigest {
                     LabeledContent("Heure du bilan") {
